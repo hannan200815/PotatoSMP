@@ -119,7 +119,7 @@ public final class PotatoSMP extends JavaPlugin {
         items = new Items(this);
         blades = new BladeManager(this, data, items);
         recipes = new PotatoRecipes(this, items);
-        if (isEnabled()) {
+        if (isPotatoFeatureEnabled()) {
             recipes.register();
         }
         menu = new PotatoMenu(this);
@@ -164,7 +164,7 @@ public final class PotatoSMP extends JavaPlugin {
     }
 
     /** Potato SMP does nothing until an admin runs /potatosmp enable. The setting is saved. */
-    public boolean isEnabled() {
+    public boolean isPotatoFeatureEnabled() {
         return data != null && data.pluginEnabled();
     }
 
@@ -174,7 +174,7 @@ public final class PotatoSMP extends JavaPlugin {
      * the world.
      */
     public void emergencyStop() {
-        setEnabled(false);
+        setPotatoFeatureEnabled(false);
         getServer().getScheduler().cancelTasks(this);
         a5.stopAll();
         NamespacedKey throwerKey = new NamespacedKey(this, "tuff_thrower");
@@ -189,7 +189,7 @@ public final class PotatoSMP extends JavaPlugin {
         }
     }
 
-    public void setEnabled(boolean value) {
+    public void setPotatoFeatureEnabled(boolean value) {
         data.setPluginEnabled(value);
         recipes.unregister();
         if (value) {
@@ -258,7 +258,7 @@ final class A5Manager implements Listener {
 
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (event.getHand() != EquipmentSlot.HAND) {
@@ -672,7 +672,7 @@ final class PotatoCommand implements CommandExecutor, TabCompleter {
             deny(sender);
             return;
         }
-        plugin.setEnabled(value);
+        plugin.setPotatoFeatureEnabled(value);
         sender.sendMessage(Text.msg(value ? "<green>Potato SMP enabled." : "<yellow>Potato SMP disabled."));
     }
 
@@ -885,7 +885,7 @@ final class FarmListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onHarvest(BlockBreakEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         Player player = event.getPlayer();
@@ -938,7 +938,7 @@ final class FoodListener implements Listener {
 
     @EventHandler
     public void onConsume(PlayerItemConsumeEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         Items.Kind kind = plugin.items().kindOf(event.getItem());
@@ -982,7 +982,7 @@ final class PotatoMenu implements Listener {
     }
 
     public void open(Player player) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             player.sendMessage(Text.msg("<red>Potato SMP is disabled. An admin can run /potatosmp enable."));
             return;
         }
@@ -1050,7 +1050,7 @@ final class PotatoMenu implements Listener {
 
     @EventHandler
     public void onClick(InventoryClickEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (!(event.getView().getTopInventory().getHolder() instanceof MenuHolder)) {
@@ -1064,7 +1064,7 @@ final class PotatoMenu implements Listener {
 
     @EventHandler
     public void onDrag(InventoryDragEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (event.getView().getTopInventory().getHolder() instanceof MenuHolder) {
@@ -1278,7 +1278,7 @@ final class CombatListener implements Listener {
 
     @EventHandler(priority = EventPriority.NORMAL)
     public void onDamage(EntityDamageEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (!(event.getEntity() instanceof Player victim) || event.isCancelled()) {
@@ -1299,7 +1299,7 @@ final class CombatListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH)
     public void onDeath(PlayerDeathEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         Player victim = event.getEntity();
@@ -1398,7 +1398,7 @@ final class GuardListener implements Listener {
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         plugin.blades().validateInventory(event.getPlayer().getInventory());
@@ -1407,7 +1407,7 @@ final class GuardListener implements Listener {
     /** Soul-banned players can't log back in until the blade is destroyed. */
     @EventHandler
     public void onLogin(PlayerLoginEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (plugin.blades().isSoulBanned(event.getPlayer().getUniqueId())) {
@@ -1418,7 +1418,7 @@ final class GuardListener implements Listener {
 
     @EventHandler
     public void onCreative(InventoryCreativeEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (isCustom(event.getCursor()) || isCustom(event.getCurrentItem())) {
@@ -1429,7 +1429,7 @@ final class GuardListener implements Listener {
 
     @EventHandler(ignoreCancelled = true)
     public void onClick(InventoryClickEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         InventoryType top = event.getView().getTopInventory().getType();
@@ -1458,7 +1458,7 @@ final class GuardListener implements Listener {
 
     @EventHandler
     public void onPrepareEnchant(PrepareItemEnchantEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (isCustom(event.getItem())) {
@@ -1468,7 +1468,7 @@ final class GuardListener implements Listener {
 
     @EventHandler
     public void onEnchant(EnchantItemEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (isCustom(event.getItem())) {
@@ -1478,7 +1478,7 @@ final class GuardListener implements Listener {
 
     @EventHandler
     public void onAnvil(PrepareAnvilEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (anyCustom(event.getInventory().getContents()) || isCustom(event.getResult())) {
@@ -1492,7 +1492,7 @@ final class GuardListener implements Listener {
      */
     @EventHandler
     public void onSmithing(PrepareSmithingEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         ItemStack base = event.getInventory().getInputEquipment();
@@ -1525,7 +1525,7 @@ final class GuardListener implements Listener {
 
     @EventHandler
     public void onHopperPickup(InventoryPickupItemEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (!validItem(event.getItem())) {
@@ -1536,7 +1536,7 @@ final class GuardListener implements Listener {
 
     @EventHandler
     public void onPickup(EntityPickupItemEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (!validItem(event.getItem())) {
@@ -1547,7 +1547,7 @@ final class GuardListener implements Listener {
 
     @EventHandler
     public void onChunkLoad(ChunkLoadEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         Chunk chunk = event.getChunk();
@@ -1560,7 +1560,7 @@ final class GuardListener implements Listener {
 
     @EventHandler
     public void onDespawn(ItemDespawnEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (event.getEntity() instanceof Item item && plugin.blades().isCurrent(item.getItemStack())) {
@@ -1575,7 +1575,7 @@ final class GuardListener implements Listener {
      */
     @EventHandler
     public void onItemDamage(EntityDamageEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (!(event.getEntity() instanceof Item item) || event.isCancelled()) {
@@ -1631,7 +1631,7 @@ final class OwnerGuard implements Listener {
 
     @EventHandler
     public void onOwnedDamage(EntityDamageByEntityEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (!(event.getEntity() instanceof Player victim)) {
@@ -1644,7 +1644,7 @@ final class OwnerGuard implements Listener {
 
     @EventHandler
     public void onSlamFall(EntityDamageEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (event.getCause() == EntityDamageEvent.DamageCause.FALL
@@ -1675,7 +1675,7 @@ final class RecipeGuard implements Listener {
 
     @EventHandler
     public void onPrepareCraft(PrepareItemCraftEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         Recipe recipe = event.getRecipe();
@@ -1884,7 +1884,7 @@ final class TuffSnowballManager implements Listener {
 
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (event.getHand() != EquipmentSlot.HAND) {
@@ -2059,7 +2059,7 @@ final class TuffSnowballManager implements Listener {
     /** Falling blocks thrown by a player can't hurt that player. */
     @EventHandler
     public void onFallingHit(EntityDamageByEntityEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (!(event.getDamager() instanceof FallingBlock block)) {
@@ -2074,7 +2074,7 @@ final class TuffSnowballManager implements Listener {
     /** TNT minecarts from the rain never explode vanilla-style, so they never break blocks. */
     @EventHandler
     public void onCartExplode(EntityExplodeEvent event) {
-        if (!plugin.isEnabled()) {
+        if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
         if (event.getEntity().getPersistentDataContainer().has(cartMarkerKey, PersistentDataType.BYTE)) {
