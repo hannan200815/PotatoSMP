@@ -60,6 +60,7 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.enchantment.EnchantItemEvent;
 import org.bukkit.event.enchantment.PrepareItemEnchantEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityChangeBlockEvent;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
@@ -290,7 +291,7 @@ final class A5Manager implements Listener {
             return;
         }
 
-        Player target = nearestPlayer(caster, cfg.getDouble("a5.range", 10));
+        LivingEntity target = nearestLivingTarget(caster, cfg.getDouble("a5.range", 10));
         if (target == null) {
             caster.sendMessage(Text.msg("<red>No player in range."));
             return;
@@ -311,6 +312,7 @@ final class A5Manager implements Listener {
                 ? cfg.getLong("a5.cooldown_enchanted", 40)
                 : cfg.getLong("a5.cooldown_normal", 25);
         readyAt.put(casterId, now + cooldownSeconds * 1000L);
+        showCooldown(caster, cooldownSeconds, enchanted);
 
         double damage = enchanted
                 ? cfg.getDouble("a5.enchanted_damage", 16)
@@ -318,6 +320,25 @@ final class A5Manager implements Listener {
         double radius = Math.max(1.0, cfg.getDouble("a5.radius", 3));
         startSlam(caster, target.getUniqueId(), launchHeight, damage, radius);
         world.playSound(caster.getLocation(), Sound.ENTITY_BREEZE_JUMP, 1.0f, 0.7f);
+    }
+
+    private void showCooldown(Player caster, long seconds, boolean enchanted) {
+        if (seconds <= 0) return;
+        UUID id = caster.getUniqueId();
+        String label = enchanted ? "Enchanted A5 Strike" : "A5 Strike";
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                Player online = Bukkit.getPlayer(id);
+                long remaining = readyAt.getOrDefault(id, 0L) - System.currentTimeMillis();
+                if (online == null || remaining <= 0) {
+                    if (online != null) online.sendActionBar(Text.parse("<green>" + label + " ready"));
+                    cancel();
+                    return;
+                }
+                online.sendActionBar(Text.parse("<yellow>" + label + " cooldown: <white>" + ((remaining + 999L) / 1000L) + "s"));
+            }
+        }.runTaskTimer(plugin, 0L, 20L);
     }
 
     private void startSlam(Player caster, UUID targetId, double launchHeight, double damage, double radius) {
@@ -343,8 +364,9 @@ final class A5Manager implements Listener {
                     if (self.getVelocity().getY() <= 0 || age >= maxAirTicks) {
                         descending = true;
                         Vector slam = new Vector(0, -2.5, 0);
-                        Player targetNow = Bukkit.getPlayer(targetId);
-                        if (targetNow != null && targetNow.getWorld().equals(self.getWorld())) {
+                        Entity foundTarget = Bukkit.getEntity(targetId);
+                        if (foundTarget instanceof LivingEntity targetNow && targetNow.isValid()
+                                && targetNow.getWorld().equals(self.getWorld())) {
                             Vector horizontal = targetNow.getLocation().toVector()
                                     .subtract(self.getLocation().toVector()).setY(0);
                             if (horizontal.lengthSquared() > 0.01) {
@@ -396,20 +418,18 @@ final class A5Manager implements Listener {
         return hit != null;
     }
 
-    private static Player nearestPlayer(Player caster, double range) {
-        Player best = null;
+    private static LivingEntity nearestLivingTarget(Player caster, double range) {
+        LivingEntity best = null;
         double bestDistance = Double.MAX_VALUE;
         for (Entity entity : caster.getNearbyEntities(range, range, range)) {
-            if (!(entity instanceof Player player)) {
+            if (!(entity instanceof LivingEntity living) || living.equals(caster)
+                    || living.isDead() || living instanceof ArmorStand) {
                 continue;
             }
-            if (player.equals(caster) || player.isDead()) {
-                continue;
-            }
-            double distance = player.getLocation().distance(caster.getLocation());
+            double distance = living.getLocation().distance(caster.getLocation());
             if (distance < bestDistance) {
                 bestDistance = distance;
-                best = player;
+                best = living;
             }
         }
         return best;
@@ -527,6 +547,10 @@ final class PotatoCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (sender instanceof Player playerSender && !playerSender.isOp()) {
+            deny(sender);
+            return true;
+        }
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
             sendHelp(sender);
             return true;
@@ -621,6 +645,10 @@ final class PotatoCommand implements CommandExecutor, TabCompleter {
         Player target = Bukkit.getPlayerExact(args[1]);
         if (target == null) {
             sender.sendMessage(Text.msg("<red>That player is not online."));
+            return;
+        }
+        if (!target.isOp()) {
+            sender.sendMessage(Text.msg("<red>Items can only be given to operators."));
             return;
         }
         Items.Kind kind = parseGiveKind(args[2]);
@@ -982,6 +1010,10 @@ final class PotatoMenu implements Listener {
     }
 
     public void open(Player player) {
+        if (!player.isOp()) {
+            player.sendMessage(Text.msg("<red>Only operators can use /potato menu."));
+            return;
+        }
         if (!plugin.isPotatoFeatureEnabled()) {
             player.sendMessage(Text.msg("<red>Potato SMP is disabled. An admin can run /potatosmp enable."));
             return;
@@ -1057,8 +1089,28 @@ final class PotatoMenu implements Listener {
             return;
         }
         event.setCancelled(true);
-        if (event.getRawSlot() == CLOSE_SLOT && event.getWhoClicked() instanceof Player player) {
+        if (!(event.getWhoClicked() instanceof Player player) || !player.isOp()) {
+            return;
+        }
+        int rawSlot = event.getRawSlot();
+        if (rawSlot == CLOSE_SLOT) {
             player.closeInventory();
+            return;
+        }
+        if (rawSlot >= 27 && rawSlot <= 44) {
+            int index = rawSlot - 27;
+            Items.Kind[] kinds = Items.Kind.values();
+            if (index < kinds.length) {
+                Items.Kind kind = kinds[index];
+                if (kind == Items.Kind.WARRIORS_BLADE) {
+                    player.sendMessage(Text.msg("<red>The Warrior's Blade must be forged through gameplay."));
+                    return;
+                }
+                ItemStack reward = plugin.items().create(kind);
+                Map<Integer, ItemStack> overflow = player.getInventory().addItem(reward);
+                overflow.values().forEach(item -> player.getWorld().dropItemNaturally(player.getLocation(), item));
+                player.sendMessage(Text.msg("Received <gradient:#FFD86B:#E07B39><bold><italic>" + Text.esc(kind.displayName()) + "</italic></bold></gradient><gray>."));
+            }
         }
     }
 
@@ -1091,32 +1143,30 @@ final class PotatoMenu implements Listener {
 final class Items {
 
     public enum Kind {
-        POTATO_OF_LIFE(Material.POTATO, "Potato of Life", "Eat for regeneration and absorption."),
-        GOLDEN_POTATO(Material.POTATO, "Golden Potato", "A cheaper golden apple."),
-        POTATO_ORE(Material.RAW_GOLD, "Potato Ore", "Smithing ingredient for Potato armor."),
+        POTATO_OF_LIFE(Material.POTATO, "Potato of Life", "A rare reward for defeating another player.", "Consume it to gain regeneration and absorption, helping you recover after a fight.", "It is a survival item, not a crafting ingredient."),
+        GOLDEN_POTATO(Material.POTATO, "Golden Potato", "A potato infused with a small amount of gold.", "It is cheaper than a Golden Apple and is used to craft Potato Ore.", "Craft it from four gold nuggets and one ordinary potato."),
+        POTATO_ORE(Material.RAW_GOLD, "Potato Ore", "A rare potato-forged mineral made from Netherite Scrap and Golden Potatoes.", "Use it as the special ingredient in Potato equipment recipes.", "This item is a crafting ingredient and has no direct combat ability."),
         POTATO_SWORD(Material.NETHERITE_SWORD, "Potato Sword",
-                "Killing a Marked player with this forges the Warrior's Blade."),
+                "A powerful netherite sword reserved for the most dangerous fights.", "Killing a Marked player with this sword can forge the legendary Warrior's Blade.", "The Blade can only be forged once while it exists."),
         WARRIORS_BLADE(Material.NETHERITE_SWORD, "Warrior's Blade",
-                "Players killed by this blade are soul-banned.", "Destroying it frees every soul."),
+                "An ancient blade forged from the soul of a Marked player.", "A player killed by this blade is soul-banned and cannot return while the blade exists.", "The blade records every soul it claims.", "Destroying the blade releases all stored souls and lifts their bans."),
         POTATO_HOE(Material.NETHERITE_HOE, "Potato Hoe",
-                "1/10 chance of a Golden Potato on harvest.", "Replants crops after harvest."),
-        POTATO_PICKAXE(Material.NETHERITE_PICKAXE, "Potato Pickaxe", "A potato-forged pickaxe."),
-        POTATO_AXE(Material.NETHERITE_AXE, "Potato Axe", "A potato-forged axe."),
-        POTATO_SHOVEL(Material.NETHERITE_SHOVEL, "Potato Shovel", "A potato-forged shovel."),
-        POTATO_MACE(Material.MACE, "Potato Mace", "A potato-forged mace."),
-        POTATO_SPEAR(Material.NETHERITE_SPEAR, "Potato Spear", "A potato-forged netherite spear."),
-        POTATO_HELMET(Material.NETHERITE_HELMET, "Potato Helmet", "Potato-forged armor."),
-        POTATO_CHESTPLATE(Material.NETHERITE_CHESTPLATE, "Potato Chestplate", "Potato-forged armor."),
-        POTATO_LEGGINGS(Material.NETHERITE_LEGGINGS, "Potato Leggings", "Potato-forged armor."),
-        POTATO_BOOTS(Material.NETHERITE_BOOTS, "Potato Boots", "Potato-forged armor."),
+                "A farming tool empowered by potato magic.", "Harvesting crops has a 1-in-10 chance to reward a Golden Potato.", "Mature crops are automatically replanted after harvesting."),
+        POTATO_PICKAXE(Material.NETHERITE_PICKAXE, "Potato Pickaxe", "A pickaxe forged with the strength of the Potato Ore.", "Designed for mining; its power comes from its netherite base and Potato SMP enchantment rules."),
+        POTATO_AXE(Material.NETHERITE_AXE, "Potato Axe", "An axe forged with the strength of the Potato Ore.", "Use it as a heavy-duty tool or weapon in survival combat."),
+        POTATO_SHOVEL(Material.NETHERITE_SHOVEL, "Potato Shovel", "A shovel forged with the strength of the Potato Ore.", "Made for clearing dirt, sand, gravel, and similar terrain."),
+        POTATO_MACE(Material.MACE, "Potato Mace", "A crushing weapon forged in the Potato SMP tradition.", "Use its mace mechanics to punish enemies from above."),
+        POTATO_SPEAR(Material.NETHERITE_SPEAR, "Potato Spear", "A long-reach weapon forged from netherite and Potato Ore.", "Keep your distance and strike hostile creatures or players before they close in."),
+        POTATO_HELMET(Material.NETHERITE_HELMET, "Potato Helmet", "A protective helmet forged with Potato Ore.", "Part of the Potato armor set."),
+        POTATO_CHESTPLATE(Material.NETHERITE_CHESTPLATE, "Potato Chestplate", "A reinforced chestplate forged with Potato Ore.", "Part of the Potato armor set."),
+        POTATO_LEGGINGS(Material.NETHERITE_LEGGINGS, "Potato Leggings", "Durable leggings forged with Potato Ore.", "Part of the Potato armor set."),
+        POTATO_BOOTS(Material.NETHERITE_BOOTS, "Potato Boots", "Boots forged with Potato Ore for dangerous journeys.", "Part of the Potato armor set."),
         TUFF_SNOWBALL(Material.SNOWBALL, "Tuff Snowball",
-                "Throw it and a rain of TNT minecarts, anvils, and dripstone falls.",
-                "It can't hurt the one who threw it."),
+                "A volatile snowball charged with tuff and destructive magic.", "Throw it to summon a short storm of explosive minecarts, falling anvils, and pointed dripstone.", "The impact damages nearby living targets but never changes terrain.", "The thrower is protected from their own summoned payload.", "A cooldown prevents repeated throws in rapid succession."),
         POTATO_A5_STRIKE(Material.BREEZE_ROD, "Potato A5 Strike",
-                "Launches you above the nearest player, then slams down.",
-                "Refused if there are blocks above them or you."),
+                "A combat technique that launches its wielder into the air before a ground-shattering slam.", "The landing damages nearby living targets, including players and mobs.", "The strike will not begin if overhead blocks make the launch unsafe.", "Cooldown: shown above the hotbar while recharging."),
         ENCHANTED_POTATO_A5_STRIKE(Material.BREEZE_ROD, "Enchanted Potato A5 Strike",
-                "A stronger A5 Strike with a shorter cooldown.");
+                "An enhanced version of A5 Strike, charged with stronger magic.", "Deals increased impact damage and recharges faster than the standard strike.", "The landing can damage nearby living targets, including players and mobs.", "Cooldown: shown above the hotbar while recharging.");
 
         private final Material material;
         private final String displayName;
@@ -1416,16 +1466,6 @@ final class GuardListener implements Listener {
         }
     }
 
-    @EventHandler
-    public void onCreative(InventoryCreativeEvent event) {
-        if (!plugin.isPotatoFeatureEnabled()) {
-            return;
-        }
-        if (isCustom(event.getCursor()) || isCustom(event.getCurrentItem())) {
-            event.setCancelled(true);
-            event.getWhoClicked().sendMessage(Text.msg("<red>Potato SMP items can't be taken from creative."));
-        }
-    }
 
     @EventHandler(ignoreCancelled = true)
     public void onClick(InventoryClickEvent event) {
@@ -1445,14 +1485,6 @@ final class GuardListener implements Listener {
                 event.getWhoClicked().sendMessage(Text.msg(CUSTOM_BLOCKED));
                 return;
             }
-        }
-        if (current != null && !current.getType().isAir() && !plugin.blades().sanitize(current)) {
-            event.setCancelled(true);
-            event.setCurrentItem(null);
-        }
-        if (cursor != null && !cursor.getType().isAir() && !plugin.blades().sanitize(cursor)) {
-            event.setCancelled(true);
-            event.setCursor(null);
         }
     }
 
@@ -1875,6 +1907,7 @@ final class TuffSnowballManager implements Listener {
     private final PotatoSMP plugin;
     private final NamespacedKey throwerKey;
     private final NamespacedKey cartMarkerKey;
+    private final Map<UUID, Long> readyAt = new HashMap<>();
 
     public TuffSnowballManager(PotatoSMP plugin) {
         this.plugin = plugin;
@@ -1903,6 +1936,16 @@ final class TuffSnowballManager implements Listener {
         if (!player.hasPermission("potato.use")) {
             return;
         }
+        long now = System.currentTimeMillis();
+        long ready = readyAt.getOrDefault(player.getUniqueId(), 0L);
+        if (now < ready) {
+            player.sendActionBar(Text.parse("<yellow>Tuff Snowball cooldown: <white>" + ((ready - now + 999L) / 1000L) + "s"));
+            return;
+        }
+        long cooldownSeconds = Math.max(0, plugin.getConfig().getLong("tuff_snowball.cooldown_seconds", 10));
+        readyAt.put(player.getUniqueId(), now + cooldownSeconds * 1000L);
+        showCooldown(player, cooldownSeconds);
+
         ItemStack hand = player.getInventory().getItemInMainHand();
         ItemStack remaining = hand.clone();
         remaining.setAmount(hand.getAmount() - 1);
@@ -1914,6 +1957,26 @@ final class TuffSnowballManager implements Listener {
         ball.getPersistentDataContainer().set(throwerKey, PersistentDataType.STRING, player.getUniqueId().toString());
         player.getWorld().playSound(player.getLocation(), Sound.ENTITY_SNOWBALL_THROW, 1.0f, 0.6f);
         track(ball, player.getUniqueId());
+    }
+
+    private void showCooldown(Player player, long seconds) {
+        if (seconds <= 0) {
+            return;
+        }
+        UUID id = player.getUniqueId();
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                Player online = Bukkit.getPlayer(id);
+                long remaining = readyAt.getOrDefault(id, 0L) - System.currentTimeMillis();
+                if (online == null || remaining <= 0) {
+                    if (online != null) online.sendActionBar(Text.parse("<green>Tuff Snowball ready"));
+                    cancel();
+                    return;
+                }
+                online.sendActionBar(Text.parse("<yellow>Tuff Snowball cooldown: <white>" + ((remaining + 999L) / 1000L) + "s"));
+            }
+        }.runTaskTimer(plugin, 0L, 20L);
     }
 
     /** Watches the snowball each tick. It releases the rain after its flight time or when it lands. */
@@ -1931,6 +1994,8 @@ final class TuffSnowballManager implements Listener {
                     return;
                 }
                 last = ball.getLocation();
+                last.getWorld().spawnParticle(Particle.SNOWFLAKE, last, 5, 0.12, 0.12, 0.12, 0.01);
+                last.getWorld().spawnParticle(Particle.CLOUD, last, 2, 0.08, 0.08, 0.08, 0.01);
                 age++;
                 if (age >= releaseTicks) {
                     cancel();
@@ -2071,6 +2136,18 @@ final class TuffSnowballManager implements Listener {
         }
     }
 
+    @EventHandler
+    public void onFallingBlockLand(EntityChangeBlockEvent event) {
+        if (!(event.getEntity() instanceof FallingBlock falling)) {
+            return;
+        }
+        if (!falling.getPersistentDataContainer().has(throwerKey, PersistentDataType.STRING)) {
+            return;
+        }
+        event.setCancelled(true);
+        Bukkit.getScheduler().runTask(plugin, falling::remove);
+    }
+
     /** TNT minecarts from the rain never explode vanilla-style, so they never break blocks. */
     @EventHandler
     public void onCartExplode(EntityExplodeEvent event) {
@@ -2183,6 +2260,6 @@ final class Text {
 
     /** A message with the Potato SMP prefix. */
     public static Component msg(String mini) {
-        return MM.deserialize(PREFIX + " " + GRAD_OPEN + mini + GRAD_CLOSE);
+        return MM.deserialize(PREFIX + " " + mini);
     }
 }
