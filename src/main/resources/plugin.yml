@@ -1,1 +1,18 @@
-
+name: PotatoSMP
+version: '1.0.0'
+main: PotatoSMP
+api-version: '1.21'
+description: Potato SMP - Potato of Life, Marked players, and the Warrior's Blade.
+authors: [PotatoSMP]
+commands:
+  potato:
+    description: Potato SMP command
+    usage: /potato <help|menu|status|blade|give|reload>
+    aliases: [potatosmp]
+permissions:
+  potato.use:
+    description: Use /potato help, menu, and status.
+    default: true
+  potato.admin:
+    description: Give items, reset the blade, and reload config.
+    default: op

@@ -1,1 +1,83 @@
+# Potato SMP configuration
 
+# Broadcast server-wide messages for Marked, forging, soul bans, and blade destruction.
+broadcasts: true
+
+# Deaths before a player becomes Marked.
+marked_deaths: 5
+
+# How long a hit still counts as the kill, in seconds. Kills need a fresh entity hit.
+kill_weapon_window_seconds: 15
+
+# Drop a Potato of Life when a player kills another player.
+potato_of_life_on_player_kill: true
+
+# Shown to soul-banned players on login and when they are kicked.
+ban_message: "<gradient:#FFD86B:#E07B39><bold><italic>You were soul-banned by the Warrior's Blade.</italic></bold></gradient>"
+
+# Potato Hoe: chance of a Golden Potato on each fully grown harvest. Crops replant on farmland.
+hoe:
+  golden_potato_chance: 0.10
+
+# Food effects. Level 1 is amplifier 0. A value of 0 seconds turns that effect off.
+effects:
+  potato_of_life:
+    regeneration_level: 2
+    regeneration_seconds: 5
+    absorption_level: 1
+    absorption_seconds: 120
+  golden_potato:
+    regeneration_level: 1
+    regeneration_seconds: 3
+    absorption_level: 1
+    absorption_seconds: 30
+
+# Kill streaks: consecutive player kills without dying. Each tier is a regeneration buff and
+# a glowing debuff on the killer. The key is the streak count that triggers the tier.
+streaks:
+  victim_repeat_cooldown_seconds: 300
+  tiers:
+    "3":
+      buff: {regeneration_level: 1, regeneration_seconds: 20}
+      debuff: {glowing_seconds: 60}
+    "5":
+      buff: {regeneration_level: 2, regeneration_seconds: 20}
+      debuff: {glowing_seconds: 90}
+    "8":
+      buff: {regeneration_level: 2, regeneration_seconds: 30}
+      debuff: {glowing_seconds: 120}
+    "12":
+      buff: {regeneration_level: 3, regeneration_seconds: 30}
+      debuff: {glowing_seconds: 180}
+
+# Tuff Snowball: thrown, it flies briefly, then a rain of TNT minecarts, anvils, and dripstone falls.
+tuff_snowball:
+  throw_speed: 1.5
+  release_seconds: 1.0
+  rain_seconds: 3
+  rain_interval_ticks: 4
+  rain_radius: 6
+  rain_height: 20
+  lifespan_seconds: 15
+  weights:
+    tnt_minecart: 50
+    anvil: 25
+    pointed_dripstone: 25
+  # TNT minecart landing: area damage, falling off to zero at blast_radius. No block damage.
+  blast_radius: 4
+  blast_max_damage: 20
+  anvil_damage_per_block: 2
+  anvil_max_damage: 40
+  dripstone_damage_per_block: 2
+  dripstone_max_damage: 20
+
+# Potato A5 Strike (normal and enchanted). Launches you above the nearest player and slams down.
+a5:
+  range: 10
+  launch_height: 12
+  max_air_ticks: 120
+  normal_damage: 10
+  enchanted_damage: 16
+  radius: 3
+  cooldown_normal: 25
+  cooldown_enchanted: 40
