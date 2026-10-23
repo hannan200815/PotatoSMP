@@ -2112,24 +2112,24 @@ final class PotatoRecipes {
 
         // Armor is made at a smithing table: diamond piece + potato ore + netherite template.
         // Potato Wand: blaze rod + potato ore.
-        shapeless("potato_wand", Kind.POTATO_WAND,
-                rule(Material.BLAZE_ROD, null, Material.RAW_GOLD, Kind.POTATO_ORE),
+        shapeless("potato_wand", Items.Kind.POTATO_WAND,
+                rule(Material.BLAZE_ROD, null, Material.RAW_GOLD, Items.Kind.POTATO_ORE),
                 Material.BLAZE_ROD, Material.RAW_GOLD);
 
         // Potato Charm: emerald + potato ore.
-        shapeless("potato_charm", Kind.POTATO_CHARM,
-                rule(Material.EMERALD, null, Material.RAW_GOLD, Kind.POTATO_ORE),
+        shapeless("potato_charm", Items.Kind.POTATO_CHARM,
+                rule(Material.EMERALD, null, Material.RAW_GOLD, Items.Kind.POTATO_ORE),
                 Material.EMERALD, Material.RAW_GOLD);
 
         // Potato Ward: nautilus shell + potato ore + netherite ingot.
-        shapeless("potato_ward", Kind.POTATO_WARD,
-                rule(Material.NAUTILUS_SHELL, null, Material.RAW_GOLD, Kind.POTATO_ORE,
+        shapeless("potato_ward", Items.Kind.POTATO_WARD,
+                rule(Material.NAUTILUS_SHELL, null, Material.RAW_GOLD, Items.Kind.POTATO_ORE,
                         Material.NETHERITE_INGOT, null),
                 Material.NAUTILUS_SHELL, Material.RAW_GOLD, Material.NETHERITE_INGOT);
 
         // Potato Lantern: glow ink sac + potato ore.
-        shapeless("potato_lantern", Kind.POTATO_LANTERN,
-                rule(Material.GLOW_INK_SAC, null, Material.RAW_GOLD, Kind.POTATO_ORE),
+        shapeless("potato_lantern", Items.Kind.POTATO_LANTERN,
+                rule(Material.GLOW_INK_SAC, null, Material.RAW_GOLD, Items.Kind.POTATO_ORE),
                 Material.GLOW_INK_SAC, Material.RAW_GOLD);
 
         // Potato Slime, Ghast, Blaze, Quartz, and Echo: the base item + potato ore.
@@ -2167,14 +2167,14 @@ final class PotatoRecipes {
 
         // Potato Bow: 3 potato ore + 3 string.
         String[] bow = {" OS", "O S", " OS"};
-        shaped("potato_bow", Kind.POTATO_BOW,
-                rule(Material.RAW_GOLD, Kind.POTATO_ORE, Material.STRING, null), bow,
+        shaped("potato_bow", Items.Kind.POTATO_BOW,
+                rule(Material.RAW_GOLD, Items.Kind.POTATO_ORE, Material.STRING, null), bow,
                 Map.of('O', Material.RAW_GOLD, 'S', Material.STRING));
 
         // Potato Shield: 3 potato ore + 3 netherite ingots + a plain shield.
         String[] shield = {"ONO", "NSN", " O "};
-        shaped("potato_shield", Kind.POTATO_SHIELD,
-                rule(Material.RAW_GOLD, Kind.POTATO_ORE, Material.NETHERITE_INGOT, null, Material.SHIELD, null),
+        shaped("potato_shield", Items.Kind.POTATO_SHIELD,
+                rule(Material.RAW_GOLD, Items.Kind.POTATO_ORE, Material.NETHERITE_INGOT, null, Material.SHIELD, null),
                 shield, Map.of('O', Material.RAW_GOLD, 'N', Material.NETHERITE_INGOT, 'S', Material.SHIELD));
 
         // Potato A5 Strike: breeze rod + potato ore.
@@ -3445,7 +3445,7 @@ final class RecipeMenu implements Listener {
     }
 
     void open(Player player) {
-        if (!plugin.activeFor(event.getDamager())) {
+        if (!plugin.activeFor(player)) {
             player.sendMessage(Text.msg("<red>Potato SMP is disabled. An admin can run /potatosmp enable."));
             return;
         }
