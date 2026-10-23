@@ -17,7 +17,7 @@ ban_message: "<gradient:#FFD86B:#E07B39><bold><italic>You were soul-banned by th
 
 # Potato Hoe: chance of a Golden Potato on each fully grown harvest. Crops replant on farmland.
 hoe:
-  golden_potato_chance: 0.10
+  golden_potato_chance: 0.20
 
 # Food effects. Level 1 is amplifier 0. A value of 0 seconds turns that effect off.
 effects:
@@ -79,5 +79,19 @@ a5:
   normal_damage: 10
   enchanted_damage: 16
   radius: 3
+  cooldown_normal: 25
+  cooldown_enchanted: 40
+
+# Potato Wand: damage per bolt (never kills in one hit).
+wand:
+  damage: 9
+
+# Potato A5 Strike: range is how far it searches for a target (players first, then mobs).
+a5:
+  range: 20
+  launch_height: 16
+  radius: 5.5
+  normal_damage: 10
+  enchanted_damage: 16
   cooldown_normal: 25
   cooldown_enchanted: 40

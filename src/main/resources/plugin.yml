@@ -7,12 +7,12 @@ authors: [PotatoSMP]
 commands:
   potato:
     description: Potato SMP command
-    usage: /potato <help|menu|status|blade|give|reload>
+    usage: /potato <help|menu|status|blade|give|reload|enable|disable|stop|recipes|nocooldown>
     aliases: [potatosmp]
 permissions:
   potato.use:
-    description: Use /potato help, menu, and status.
+    description: Use /potato help, recipes, and status.
     default: true
   potato.admin:
-    description: Give items, reset the blade, and reload config.
+    description: Give items, reset the blade, reload config, enable or stop the plugin, open the menu, and set nocooldown.
     default: op
