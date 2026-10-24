@@ -296,6 +296,12 @@ final class A5Manager implements Listener {
     private final PotatoSMP plugin;
     private final Map<UUID, Long> readyAt = new HashMap<>();
     private final Set<UUID> slamming = new HashSet<>();
+    private final Set<UUID> sqSlammers = new HashSet<>();
+
+    /** True while this player is mid SQ Disengager slam. They take no damage at all. */
+    public boolean isSqSlamming(UUID id) {
+        return slamming.contains(id) && sqSlammers.contains(id);
+    }
 
     public A5Manager(PotatoSMP plugin) {
         this.plugin = plugin;
@@ -328,13 +334,24 @@ final class A5Manager implements Listener {
             return;
         }
         Items.Kind kind = plugin.items().kindOf(event.getItem());
-        if (kind != Items.Kind.POTATO_A5_STRIKE && kind != Items.Kind.ENCHANTED_POTATO_A5_STRIKE) {
+        if (kind != Items.Kind.POTATO_A5_STRIKE && kind != Items.Kind.ENCHANTED_POTATO_A5_STRIKE
+                && kind != Items.Kind.SQ_DISENGAGER) {
             return;
         }
         event.setCancelled(true);
 
         Player caster = event.getPlayer();
+        if (caster.getLocation().getBlock().getType() == Material.COBWEB
+                || caster.getLocation().clone().add(0, 1, 0).getBlock().getType() == Material.COBWEB) {
+            caster.sendActionBar(Text.gradient("Can't strike from a cobweb"));
+            return;
+        }
         boolean enchanted = kind == Items.Kind.ENCHANTED_POTATO_A5_STRIKE;
+        boolean sq = kind == Items.Kind.SQ_DISENGAGER;
+        if (sq && !caster.hasPermission("potato.admin")) {
+            caster.sendMessage(Text.msg("<red>Only admins can use the SQ Disengager."));
+            return;
+        }
         FileConfiguration cfg = plugin.getConfig();
         UUID casterId = caster.getUniqueId();
         long now = System.currentTimeMillis();
@@ -344,13 +361,13 @@ final class A5Manager implements Listener {
             return;
         }
         long ready = readyAt.getOrDefault(casterId, 0L);
-        if (!plugin.noCooldowns() && now < ready) {
+        if (!sq && !plugin.noCooldowns() && now < ready) {
             caster.sendActionBar(Text.itemCooldown(kind, ((ready - now) + 999L) / 1000L));
             return;
         }
 
-        LivingEntity target = pickTarget(caster, cfg.getDouble("a5.range", 20));
-        UUID targetId = target == null ? null : target.getUniqueId();
+        LivingEntity target = null;
+        UUID targetId = null;
         double launchHeight = Math.max(6.0, cfg.getDouble("a5.launch_height", 16));
         World world = caster.getWorld();
         Location overhead = target != null ? target.getLocation() : caster.getLocation();
@@ -361,15 +378,26 @@ final class A5Manager implements Listener {
             return;
         }
 
-        long cooldownSeconds = enchanted
-                ? cfg.getLong("a5.cooldown_enchanted", 40)
-                : cfg.getLong("a5.cooldown_normal", 25);
-        readyAt.put(casterId, now + cooldownSeconds * 1000L);
+        long cooldownSeconds = sq
+                ? cfg.getLong("sq.cooldown", 15)
+                : enchanted
+                        ? cfg.getLong("a5.cooldown_enchanted", 40)
+                        : cfg.getLong("a5.cooldown_normal", 25);
+        if (!sq) {
+            readyAt.put(casterId, now + cooldownSeconds * 1000L);
+        }
 
-        double damage = enchanted
-                ? cfg.getDouble("a5.enchanted_damage", 16)
-                : cfg.getDouble("a5.normal_damage", 10);
+        double damage = sq
+                ? cfg.getDouble("sq.damage", 16)
+                : enchanted
+                        ? cfg.getDouble("a5.enchanted_damage", 16)
+                        : cfg.getDouble("a5.normal_damage", 10);
         double radius = Math.max(2.0, cfg.getDouble("a5.radius", 5.5));
+        if (sq) {
+            sqSlammers.add(casterId);
+        } else {
+            sqSlammers.remove(casterId);
+        }
         startSlam(caster, targetId, launchHeight, damage, radius);
         world.playSound(caster.getLocation(), Sound.ENTITY_ENDER_DRAGON_FLAP, 1.0f, 1.4f);
         world.playSound(caster.getLocation(), Sound.ITEM_TRIDENT_RIPTIDE_3, 1.0f, 0.8f);
@@ -1354,6 +1382,9 @@ final class Items {
         POTATO_REROLLER(Material.AMETHYST_SHARD, "Potato Reroller",
                 "Right-click to use it up and turn it into a random Potato item.",
                 "It is never crafted, and it is gone once used."),
+        SQ_DISENGAGER(Material.FIREWORK_STAR, "SQ Disengager",
+                "KNUCKLE BOOM INTO THE SKY AND GROUND SLAM.",
+                "Right-click: launch up, then slam down. No fall damage."),
         POTATO_OF_LIFE(Material.POTATO, "Potato of Life", "Eat it for Regeneration II (5 s) and Absorption I (2 min).", "Dropped when a player kills another player.", "Passive: Health Boost I while held in either hand."),
         GOLDEN_POTATO(Material.POTATO, "Golden Potato", "A cheaper golden apple.", "Eat it for Regeneration I (3 s) and Absorption I (30 s).", "Passive: Absorption I while held in either hand."),
         POTATO_ORE(Material.RAW_GOLD, "Potato Ore", "Crafting and smithing ingredient.", "Used in potato tools, the mace, spear, bow, shield, and A5 Strike."),
@@ -1419,6 +1450,7 @@ final class Items {
                 case POTATO_CHARM -> "Sneak + right-click: Fortune Drop, dropping a Potato of Life at your feet. 40 s cooldown.";
                 case POTATO_WARD -> "Sneak + right-click: Ward Ring, pushing enemies out within 6 blocks. 30 s cooldown.";
                 case POTATO_SLIME, POTATO_GHAST, POTATO_BLAZE, POTATO_QUARTZ, POTATO_ECHO -> "";
+                case SQ_DISENGAGER -> "";
                 case POTATO_COMPASS -> "Sneak + right-click: Lodestone, glowing players within 30 blocks. 25 s cooldown.";
                 case POTATO_FEATHER -> "Sneak + right-click: Gust, launching you up and pushing enemies within 4 blocks. 15 s cooldown.";
                 case POTATO_SCROLL -> "Sneak + right-click: Reveal, glowing players within 40 blocks and counting mobs. 30 s cooldown.";
@@ -1451,6 +1483,7 @@ final class Items {
                 case POTATO_COMPASS -> new String[] {"#80DEEA", "#00838F"};
                 case POTATO_FEATHER -> new String[] {"#F5F5F5", "#B0BEC5"};
                 case POTATO_SCROLL -> new String[] {"#FFE0B2", "#A1887F"};
+                case SQ_DISENGAGER -> new String[] {"#FFD700", "#FF8C00"};
                 case POTATO_REROLLER -> new String[] {"#FF9CF0", "#7D3C98"};
                 case POTATO_WAND -> new String[] {"#E0B0FF", "#7B1FA2"};
                 case POTATO_CHARM -> new String[] {"#7CFC00", "#00C853"};
@@ -2012,6 +2045,14 @@ final class OwnerGuard implements Listener {
                 && event.getEntity() instanceof Player player
                 && (plugin.a5().isSlamming(player.getUniqueId())
                 || plugin.secondAbilities().isGroundBreaking(player.getUniqueId()))) {
+            event.setCancelled(true);
+        }
+    }
+
+    /** SQ Disengager: no damage of any kind while the slam is active. */
+    @EventHandler
+    public void onSqSlamDamage(EntityDamageEvent event) {
+        if (event.getEntity() instanceof Player player && plugin.a5().isSqSlamming(player.getUniqueId())) {
             event.setCancelled(true);
         }
     }
@@ -3711,7 +3752,7 @@ final class PotatoRerollerListener implements Listener {
         List<Items.Kind> pool = new ArrayList<>();
         for (Items.Kind kind : Items.Kind.values()) {
             if (kind != Items.Kind.POTATO_REROLLER && kind != Items.Kind.WARRIORS_BLADE
-                    && kind != Items.Kind.POTATO_OVERLORD) {
+                    && kind != Items.Kind.POTATO_OVERLORD && kind != Items.Kind.SQ_DISENGAGER) {
                 pool.add(kind);
             }
         }
