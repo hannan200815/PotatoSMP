@@ -93,6 +93,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.entity.ItemDisplay;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.event.entity.ProjectileHitEvent;
@@ -258,6 +259,10 @@ public final class PotatoSMP extends JavaPlugin {
         return recipes;
     }
 
+    public SecondAbilities secondAbilities() {
+        return secondAbilities;
+    }
+
     public A5Manager a5() {
         return a5;
     }
@@ -345,14 +350,11 @@ final class A5Manager implements Listener {
         }
 
         LivingEntity target = pickTarget(caster, cfg.getDouble("a5.range", 20));
-        if (target == null) {
-            caster.sendMessage(Text.msg("<red>No target in range."));
-            return;
-        }
-
+        UUID targetId = target == null ? null : target.getUniqueId();
         double launchHeight = Math.max(6.0, cfg.getDouble("a5.launch_height", 16));
         World world = caster.getWorld();
-        if (blockedAbove(target.getLocation().add(0, 1, 0), world.getMaxHeight() - target.getY())
+        Location overhead = target != null ? target.getLocation() : caster.getLocation();
+        if (blockedAbove(overhead.clone().add(0, 1, 0), world.getMaxHeight() - overhead.getY())
                 || blockedAbove(caster.getLocation().add(0, 1, 0), launchHeight + 1.0)) {
             caster.sendActionBar(Text.gradient("Blocked by shelter"));
             caster.sendMessage(Text.msg("<red>Blocked by shelter. A5 Strike refused."));
@@ -368,7 +370,7 @@ final class A5Manager implements Listener {
                 ? cfg.getDouble("a5.enchanted_damage", 16)
                 : cfg.getDouble("a5.normal_damage", 10);
         double radius = Math.max(2.0, cfg.getDouble("a5.radius", 5.5));
-        startSlam(caster, target.getUniqueId(), launchHeight, damage, radius);
+        startSlam(caster, targetId, launchHeight, damage, radius);
         world.playSound(caster.getLocation(), Sound.ENTITY_ENDER_DRAGON_FLAP, 1.0f, 1.4f);
         world.playSound(caster.getLocation(), Sound.ITEM_TRIDENT_RIPTIDE_3, 1.0f, 0.8f);
     }
@@ -400,11 +402,14 @@ final class A5Manager implements Listener {
         return bestPlayer != null ? bestPlayer : bestMob;
     }
 
+    /**
+     * SQ Disengager aim: straight up, then straight down. If there is a target, the rise drifts over
+     * it first, so the drop lands above it. The fall itself never homes in.
+     */
     private void startSlam(Player caster, UUID targetId, double launchHeight, double damage, double radius) {
         UUID casterId = caster.getUniqueId();
         slamming.add(casterId);
-        FileConfiguration cfg = plugin.getConfig();
-        int maxAirTicks = Math.max(20, cfg.getInt("a5.max_air_ticks", 120));
+        int maxAirTicks = Math.max(20, plugin.getConfig().getInt("a5.max_air_ticks", 120));
         caster.setVelocity(new Vector(0, Math.sqrt(2.0 * GRAVITY * launchHeight), 0));
 
         new BukkitRunnable() {
@@ -422,12 +427,18 @@ final class A5Manager implements Listener {
                 }
                 World world = self.getWorld();
                 Location at = self.getLocation();
-                Entity targetNow = Bukkit.getEntity(targetId);
-
                 if (!descending) {
-                    // Rising: drift toward the target, leave a cloud trail, and rising whistle.
-                    Vector drift = horizontalTowards(at, targetNow, 0.3);
-                    self.setVelocity(new Vector(drift.getX(), self.getVelocity().getY(), drift.getZ()));
+                    Entity targetNow = targetId == null ? null : Bukkit.getEntity(targetId);
+                    if (targetNow != null && targetNow.getWorld().equals(world)) {
+                        Vector velocity = self.getVelocity();
+                        Vector drift = targetNow.getLocation().toVector().subtract(at.toVector()).setY(0);
+                        if (drift.lengthSquared() > 0.64) {
+                            Vector step = drift.normalize().multiply(0.35);
+                            self.setVelocity(new Vector(step.getX(), velocity.getY(), step.getZ()));
+                        } else {
+                            self.setVelocity(new Vector(0, velocity.getY(), 0));
+                        }
+                    }
                     world.spawnParticle(Particle.CLOUD, at, 10, 0.4, 0.2, 0.4, 0.03);
                     world.spawnParticle(Particle.FLAME, at, 5, 0.3, 0.1, 0.3, 0.01);
                     if (age % 4 == 0) {
@@ -435,15 +446,13 @@ final class A5Manager implements Listener {
                     }
                     if (self.getVelocity().getY() <= 0 || age >= maxAirTicks) {
                         descending = true;
-                        Vector slam = horizontalTowards(at, targetNow, 0.6);
-                        slam.setY(-3.2);
-                        self.setVelocity(slam);
                         world.playSound(at, Sound.ENTITY_PHANTOM_SWOOP, 1.2f, 0.6f);
                     }
                     return;
                 }
 
-                // Falling: steer at the target and leave a fiery trail.
+                // Falling: straight down, with a fiery trail.
+                self.setVelocity(new Vector(0, -2.5, 0));
                 world.spawnParticle(Particle.FLAME, at, 8, 0.25, 0.25, 0.25, 0.02);
                 world.spawnParticle(Particle.CRIT, at, 10, 0.3, 0.3, 0.3, 0.1);
                 world.spawnParticle(Particle.SMOKE, at, 6, 0.3, 0.3, 0.3, 0.02);
@@ -463,7 +472,10 @@ final class A5Manager implements Listener {
 
     private void impact(Player caster, double damage, double radius) {
         World world = caster.getWorld();
-        Location center = caster.getLocation();
+        // SQ Disengager style: find the ground directly under the slam, and blast from there.
+        RayTraceResult ground = world.rayTraceBlocks(caster.getLocation(), new Vector(0, -1, 0), 6.0,
+                FluidCollisionMode.NEVER, true);
+        Location center = ground != null ? ground.getHitPosition().toLocation(world) : caster.getLocation();
 
         world.spawnParticle(Particle.EXPLOSION, center, 4, 0.6, 0.2, 0.6, 0.0);
         world.spawnParticle(Particle.CLOUD, center, 90, radius * 0.5, 0.4, radius * 0.5, 0.15);
@@ -507,6 +519,18 @@ final class A5Manager implements Listener {
 
         // Passive: a short Resistance I after every slam.
         caster.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 60, 0, false, true, true));
+    }
+
+    /** Steers at the centre of the target's hitbox, so the slam lands on the body, not the feet. */
+    private static Vector directionTo(Location from, Entity target, double speed) {
+        if (target == null || !target.getWorld().equals(from.getWorld())) {
+            return new Vector(0, -speed, 0);
+        }
+        Vector toward = target.getBoundingBox().getCenter().subtract(from.toVector());
+        if (toward.lengthSquared() < 0.0001) {
+            return new Vector(0, -speed, 0);
+        }
+        return toward.normalize().multiply(speed);
     }
 
     private static Vector horizontalTowards(Location from, Entity target, double speed) {
@@ -1279,7 +1303,7 @@ final class Items {
     public enum Kind {
         POTATO_WAND(Material.BLAZE_ROD, "Potato Wand",
                 "Right-click: fire a potato bolt that hits hard.",
-                "Each bolt deals up to 9 damage and never kills in one hit.",
+                "Each bolt deals 9 damage and can kill.",
                 "Shots have a short cooldown."),
         POTATO_CHARM(Material.EMERALD, "Potato Charm",
                 "A lucky charm that brings good fortune when carried.",
@@ -1346,7 +1370,7 @@ final class Items {
         POTATO_LEGGINGS(Material.NETHERITE_LEGGINGS, "Potato Leggings", "Netherite armor made by smithing diamond leggings.", "Passive: Resistance I while worn."),
         POTATO_BOOTS(Material.NETHERITE_BOOTS, "Potato Boots", "Netherite armor made by smithing diamond boots.", "Passive: Resistance I while worn."),
         TUFF_SNOWBALL(Material.SNOWBALL, "Tuff Snowball", "Throw it: a rain of TNT minecarts, anvils, and pointed dripstone falls.", "TNT minecarts explode but never break blocks.", "It can't hurt the one who threw it."),
-        POTATO_A5_STRIKE(Material.BREEZE_ROD, "Potato A5 Strike", "Right-click: launch above the nearest player or mob, then slam down.", "Refused if blocks are above the target or you.", "Passive: Jump Boost I while held in either hand."),
+        POTATO_A5_STRIKE(Material.BREEZE_ROD, "Potato A5 Strike", "Right-click: launch straight up, then slam straight down where you stand.", "Refused if blocks are above the target or you.", "Passive: Jump Boost I while held in either hand."),
         ENCHANTED_POTATO_A5_STRIKE(Material.BREEZE_ROD, "Enchanted Potato A5 Strike", "A stronger A5 Strike with a shorter cooldown.", "Passive: Jump Boost II while held in either hand."),
         POTATO_BOW(Material.BOW, "Potato Bow", "Arrows from this bow deal bonus damage.", "Passive: Speed I while held in either hand."),
         POTATO_SHIELD(Material.SHIELD, "Potato Shield", "Hold it and a ring of potatoes surrounds you.", "Pushes enemies and mobs back, and halves melee damage from them.", "Passive: Resistance I while held in either hand.");
@@ -1384,11 +1408,11 @@ final class Items {
                 case POTATO_PICKAXE -> "Sneak + right-click: Vein Vision, showing ores within 12 blocks for 10 s. 30 s cooldown.";
                 case POTATO_AXE -> "Sneak + right-click: Whirl, hitting enemies within 5 blocks. 12 s cooldown.";
                 case POTATO_SHOVEL -> "Sneak + right-click: Earth Shatter, hitting enemies within 6 blocks. 20 s cooldown.";
-                case POTATO_MACE -> "Sneak + right-click: Ground Slam, hitting enemies within 7 blocks hard. 15 s cooldown.";
+                case POTATO_MACE -> "Sneak + right-click: Phoenix Call, leaping up and slamming with fire and ice. Higher falls hit harder. 15 s cooldown.";
                 case POTATO_SPEAR -> "Sneak + right-click: Lunge forward and hit what you pass. 10 s cooldown.";
                 case POTATO_HELMET, POTATO_CHESTPLATE, POTATO_LEGGINGS, POTATO_BOOTS ->
                         "Sneak + F: Thorns Burst, hitting and pushing enemies within 5 blocks. 45 s cooldown.";
-                case POTATO_BOW -> "Sneak + right-click: Volley of three arrows. 8 s cooldown.";
+                case POTATO_BOW -> "Sneak + right-click: Potato bolt, like the wand. 6 s cooldown.";
                 case POTATO_SHIELD -> "Sneak + right-click: Bash enemies within 5 blocks, hitting and pushing them. 12 s cooldown.";
                 case POTATO_LANTERN -> "Sneak + right-click: Flare, setting enemies within 16 blocks alight. 30 s cooldown.";
                 case POTATO_WAND -> "Sneak + right-click: Potato Nova, a burst of damage around you. 6 s cooldown.";
@@ -1760,7 +1784,9 @@ final class GuardListener implements Listener {
                 || top == InventoryType.ENCHANTING || top == InventoryType.CARTOGRAPHY || top == InventoryType.LOOM) {
             if (top == InventoryType.SMITHING
                     ? blockedInSmithing(current) || blockedInSmithing(cursor)
-                    : isCustom(current) || isCustom(cursor)) {
+                    : (top == InventoryType.ANVIL
+                            ? blockedInAnvil(current) || blockedInAnvil(cursor)
+                            : isCustom(current) || isCustom(cursor))) {
                 event.setCancelled(true);
                 event.getWhoClicked().sendMessage(Text.msg(CUSTOM_BLOCKED));
                 return;
@@ -1801,7 +1827,7 @@ final class GuardListener implements Listener {
         if (!plugin.isPotatoFeatureEnabled()) {
             return;
         }
-        if (anyCustom(event.getInventory().getContents()) || isCustom(event.getResult())) {
+        if (anyBlockedInAnvil(event.getInventory().getContents()) || blockedInAnvil(event.getResult())) {
             event.setResult(null);
         }
     }
@@ -1831,6 +1857,21 @@ final class GuardListener implements Listener {
         if (anyCustom(event.getInventory().getContents()) || isCustom(result)) {
             event.setResult(null);
         }
+    }
+
+    /** Only the Potato Sword and the Warrior's Blade stay out of the anvil. Their sharpness is fixed. */
+    private boolean blockedInAnvil(ItemStack stack) {
+        Items.Kind kind = plugin.items().kindOf(stack);
+        return kind == Items.Kind.POTATO_SWORD || kind == Items.Kind.WARRIORS_BLADE;
+    }
+
+    private boolean anyBlockedInAnvil(ItemStack[] stacks) {
+        for (ItemStack stack : stacks) {
+            if (blockedInAnvil(stack)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean blockedInSmithing(ItemStack stack) {
@@ -1969,7 +2010,8 @@ final class OwnerGuard implements Listener {
         }
         if (event.getCause() == EntityDamageEvent.DamageCause.FALL
                 && event.getEntity() instanceof Player player
-                && plugin.a5().isSlamming(player.getUniqueId())) {
+                && (plugin.a5().isSlamming(player.getUniqueId())
+                || plugin.secondAbilities().isGroundBreaking(player.getUniqueId()))) {
             event.setCancelled(true);
         }
     }
@@ -2624,8 +2666,8 @@ final class StreakManager {
 final class Text {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
-    private static final String GRAD_OPEN = "<gradient:#FFD86B:#E07B39><bold><italic>";
-    private static final String GRAD_CLOSE = "</italic></bold></gradient>";
+    private static final String GRAD_OPEN = "<gradient:#FFD86B:#E07B39><bold>";
+    private static final String GRAD_CLOSE = "</bold></gradient>";
     private static final String PREFIX = GRAD_OPEN + "[Potato SMP]" + GRAD_CLOSE;
 
     private Text() {
@@ -2638,8 +2680,8 @@ final class Text {
 
     /** Gradient bold italic in the two given colours. */
     public static Component gradient(String text, String from, String to) {
-        return MM.deserialize("<gradient:" + from + ":" + to + "><bold><italic>" + esc(text)
-                + "</italic></bold></gradient>");
+        return MM.deserialize("<gradient:" + from + ":" + to + "><bold>" + esc(text)
+                + "</bold></gradient>");
     }
 
     /** Item name in its own colours, then the cooldown in plain text. */
@@ -2778,11 +2820,15 @@ final class PassiveManager implements Listener {
     private void shieldPulse(Player holder) {
         World world = holder.getWorld();
         Location center = holder.getLocation();
-        for (int i = 0; i < 16; i++) {
-            double angle = 2.0 * Math.PI * i / 16;
-            world.spawnParticle(Particle.ITEM,
-                    center.getX() + Math.cos(angle) * 2.2, center.getY() + 1.0,
-                    center.getZ() + Math.sin(angle) * 2.2, 1, 0, 0, 0, 0.0, new ItemStack(Material.POTATO));
+        for (int i = 0; i < 8; i++) {
+            double angle = 2.0 * Math.PI * i / 8 + holder.getTicksLived() * 0.15;
+            Location at = new Location(world, center.getX() + Math.cos(angle) * 2.2, center.getY() + 1.0,
+                    center.getZ() + Math.sin(angle) * 2.2);
+            ItemDisplay potato = world.spawn(at, ItemDisplay.class, display -> {
+                display.setItemStack(new ItemStack(Material.POTATO));
+                display.setPersistent(false);
+            });
+            plugin.getServer().getScheduler().runTaskLater(plugin, potato::remove, 6L);
         }
         for (LivingEntity living : world.getNearbyLivingEntities(center, 2.5)) {
             if (living.equals(holder) || living instanceof ArmorStand) {
@@ -2919,7 +2965,7 @@ final class ItemAbilities implements Listener {
         if (event.getHitEntity() instanceof LivingEntity target && bolt.getShooter() instanceof Player shooter
                 && !target.equals(shooter)) {
             double base = plugin.getConfig().getDouble("wand.damage", 9);
-            double damage = Math.min(base, target.getHealth() - 1.0);
+            double damage = base;
             if (damage > 0) {
                 target.damage(damage, shooter);
             }
@@ -2987,6 +3033,7 @@ final class SecondAbilities implements Listener {
 
     private final PotatoSMP plugin;
     private final Map<UUID, Map<Items.Kind, Long>> readyAt = new HashMap<>();
+    private final Set<UUID> breaking = new HashSet<>();
 
     SecondAbilities(PotatoSMP plugin) {
         this.plugin = plugin;
@@ -3103,16 +3150,15 @@ final class SecondAbilities implements Listener {
                 return 20;
             }
             case POTATO_MACE -> {
-                hit(player, 7.0, 10.0);
-                return 15;
+                return phoenixCall(player);
             }
             case POTATO_SPEAR -> {
                 lunge(player);
                 return 10;
             }
             case POTATO_BOW -> {
-                volley(player);
-                return 8;
+                firePotatoBolt(player);
+                return 6;
             }
             case POTATO_SHIELD -> {
                 hit(player, 5.0, 3.0);
@@ -3253,6 +3299,90 @@ final class SecondAbilities implements Listener {
         }
     }
 
+    /** True while this player is mid ground break. Their fall damage is cancelled. */
+    public boolean isGroundBreaking(UUID id) {
+        return breaking.contains(id);
+    }
+
+    /**
+     * Phoenix Call (potato mace): leap up, then slam down with fire and ice. The higher the fall,
+     * the harder the landing hits. The user takes no fall damage, as with the Phoenix Call.
+     */
+    private double phoenixCall(Player player) {
+        UUID id = player.getUniqueId();
+        breaking.add(id);
+        player.setVelocity(new Vector(0, 1.4, 0));
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_ENDER_DRAGON_FLAP, 1.0f, 1.2f);
+        new BukkitRunnable() {
+            private int age = 0;
+            private boolean descending = false;
+            private double peakY = Double.NEGATIVE_INFINITY;
+
+            @Override
+            public void run() {
+                age++;
+                Player self = Bukkit.getPlayer(id);
+                if (self == null || self.isDead() || age > 120) {
+                    breaking.remove(id);
+                    cancel();
+                    return;
+                }
+                Location at = self.getLocation();
+                peakY = Math.max(peakY, at.getY());
+                if (!descending) {
+                    self.getWorld().spawnParticle(Particle.FLAME, at, 6, 0.3, 0.1, 0.3, 0.02);
+                    self.getWorld().spawnParticle(Particle.SNOWFLAKE, at, 6, 0.3, 0.1, 0.3, 0.02);
+                    if (self.getVelocity().getY() <= 0 || age >= 40) {
+                        descending = true;
+                    }
+                    return;
+                }
+                self.setVelocity(self.getVelocity().setY(-2.5));
+                self.getWorld().spawnParticle(Particle.FLAME, at, 8, 0.3, 0.2, 0.3, 0.1);
+                if (age > 5 && self.isOnGround()) {
+                    double fallHeight = Math.max(0.0, peakY - at.getY());
+                    phoenixSlam(self, fallHeight);
+                    breaking.remove(id);
+                    cancel();
+                }
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+        return 15;
+    }
+
+    /** The landing: fire and ice burst, damage that grows with the fall height, fire and slow on hit. */
+    private void phoenixSlam(Player player, double fallHeight) {
+        World world = player.getWorld();
+        Location impact = player.getLocation();
+        double radius = 4.5;
+        double damage = 4.0 + Math.min(fallHeight * 0.75, 16.0);
+        world.spawnParticle(Particle.FLAME, impact, 80, radius * 0.5, 0.3, radius * 0.5, 0.05);
+        world.spawnParticle(Particle.SNOWFLAKE, impact, 80, radius * 0.5, 0.3, radius * 0.5, 0.05);
+        world.playSound(impact, Sound.ENTITY_GENERIC_EXPLODE, 1.0f, 0.8f);
+        world.playSound(impact, Sound.BLOCK_GLASS_BREAK, 1.0f, 0.6f);
+        for (LivingEntity e : nearby(player, radius)) {
+            double closeness = 1.0 - e.getLocation().distance(impact) / radius;
+            e.damage(damage * (0.5 + 0.5 * closeness), player);
+            e.setFireTicks(80);
+            e.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 40, 1, false, true, true));
+            Vector out = e.getLocation().toVector().subtract(impact.toVector()).setY(0);
+            if (out.lengthSquared() < 0.0001) {
+                out = new Vector(1, 0, 0);
+            }
+            e.setVelocity(out.normalize().multiply(0.6 + closeness).setY(0.5));
+        }
+    }
+
+    /** Fires a potato bolt. The same bolt handler as the wand deals its damage. */
+    private void firePotatoBolt(Player player) {
+        Vector velocity = player.getEyeLocation().getDirection().multiply(2.8);
+        Snowball bolt = player.launchProjectile(Snowball.class, velocity);
+        bolt.setItem(new ItemStack(Material.POTATO));
+        bolt.getPersistentDataContainer().set(new NamespacedKey(plugin, "potato_wand_bolt"),
+                PersistentDataType.BYTE, (byte) 1);
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_ARROW_SHOOT, 1.0f, 0.6f);
+    }
+
     private static List<LivingEntity> nearby(Player player, double radius) {
         List<LivingEntity> found = new ArrayList<>();
         for (LivingEntity living : player.getWorld().getNearbyLivingEntities(player.getLocation(), radius)) {
@@ -3292,8 +3422,15 @@ final class SecondAbilities implements Listener {
             }
             e.setVelocity(out.normalize().multiply(0.8).setY(0.45));
         }
-        player.getWorld().spawnParticle(Particle.SWEEP_ATTACK, player.getLocation().add(0, 1, 0), 6, 1.5, 0.3, 1.5, 0.0);
-        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_PLAYER_ATTACK_SWEEP, 1.0f, 0.9f);
+        World world = player.getWorld();
+        Location centre = player.getLocation().add(0, 0.3, 0);
+        for (int i = 0; i < 32; i++) {
+            double angle = 2.0 * Math.PI * i / 32;
+            world.spawnParticle(Particle.CRIT, centre.getX() + Math.cos(angle) * radius, centre.getY(),
+                    centre.getZ() + Math.sin(angle) * radius, 1, 0, 0, 0, 0.0);
+        }
+        world.spawnParticle(Particle.EXPLOSION, centre, 1);
+        world.playSound(centre, Sound.ENTITY_GENERIC_EXPLODE, 0.8f, 1.4f);
     }
 
     /** Hits enemies in a cone in front of the player. */
@@ -3396,6 +3533,9 @@ final class WeaponPassives implements Listener {
             apply(event, attacker, victim, 0.03, 0.10, 0.0);
         } else if (kind == Items.Kind.WARRIORS_BLADE) {
             apply(event, attacker, victim, 0.06, 0.25, 2.0);
+        } else if (kind == Items.Kind.POTATO_MACE) {
+            // Glacial Hold: slows the target for 2 seconds on hit.
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 40, 1, false, true, true));
         }
     }
 
