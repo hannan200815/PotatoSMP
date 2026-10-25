@@ -1,41 +1,137 @@
-# Potato SMP configuration
+# Potato SMP configuration. Every setting has a built-in default: remove a line to use it.
+# Durations are in seconds unless the name says ticks. Damage is in health points
+# (20 = ten hearts).
 
-# Broadcast server-wide messages for Marked, forging, soul bans, and blade destruction.
+a5:
+  cooldown_enchanted: 40
+  cooldown_normal: 25
+  enchanted_damage: 16
+  launch_height: 16
+  max_air_ticks: 120
+  normal_damage: 10
+  radius: 5.5
+abilities:
+  golden_potato:
+    cooldown: 30
+    heal: 6.0
+    radius: 7.0
+    strength: 1.0
+  potato_axe:
+    cooldown: 12
+    damage: 4.0
+    radius: 5.0
+  potato_blaze:
+    cooldown: 20
+    damage: 3.0
+    fire_ticks: 100
+    radius: 5.0
+  potato_bow:
+    cooldown: 6
+  potato_charm:
+    cooldown: 40
+  potato_compass:
+    cooldown: 25
+  potato_echo:
+    cooldown: 15
+    damage: 2.0
+    radius: 6.0
+  potato_feather:
+    cooldown: 15
+    radius: 4.0
+    strength: 1.0
+  potato_ghast:
+    cooldown: 20
+    radius: 8.0
+    strength: 1.6
+  potato_helmet:
+    cooldown: 45
+    damage: 4.0
+    radius: 5.0
+  potato_hoe:
+    cooldown: 30
+  potato_lantern:
+    cooldown: 30
+    fire_ticks: 80
+    radius: 16.0
+  potato_mace:
+    base_damage: 4.0
+    fall_scale: 0.75
+    fire_ticks: 80
+    leap_speed: 1.4
+    max_fall_damage: 16.0
+    radius: 4.5
+    slow_ticks: 40
+  potato_of_life:
+    cooldown: 60
+    heal: 8.0
+  potato_pickaxe:
+    cooldown: 30
+  potato_quartz:
+    cooldown: 25
+    radius: 12.0
+  potato_scroll:
+    cooldown: 30
+  potato_shield:
+    cooldown: 12
+    damage: 3.0
+    radius: 5.0
+  potato_shovel:
+    cooldown: 20
+    damage: 4.0
+    radius: 6.0
+  potato_slime:
+    cooldown: 15
+    radius: 4.0
+    strength: 1.4
+  potato_spear:
+    cooldown: 10
+  potato_sword:
+    cooldown: 8
+  potato_wand:
+    cooldown: 6
+    damage: 3.0
+    radius: 5.0
+  potato_ward:
+    cooldown: 30
+    radius: 6.0
+    strength: 1.4
+  warriors_blade:
+    cooldown: 25
+    damage: 8.0
+    radius: 9.0
+ban_message: "You were soul-banned."
+bomber:
+  bomb_power: 3.0
+  drop_interval_ticks: 40
+  speed: 0.7
 broadcasts: true
-
-# Deaths before a player becomes Marked.
-marked_deaths: 5
-
-# How long a hit still counts as the kill, in seconds. Kills need a fresh entity hit.
-kill_weapon_window_seconds: 15
-
-# Drop a Potato of Life when a player kills another player.
-potato_of_life_on_player_kill: true
-
-# Shown to soul-banned players on login and when they are kicked.
-ban_message: "<gradient:#FFD86B:#E07B39><bold><italic>You were soul-banned by the Warrior's Blade.</italic></bold></gradient>"
-
-# Potato Hoe: chance of a Golden Potato on each fully grown harvest. Crops replant on farmland.
 hoe:
   golden_potato_chance: 0.20
-
-# Food effects. Level 1 is amplifier 0. A value of 0 seconds turns that effect off.
-effects:
-  potato_of_life:
-    regeneration_level: 2
-    regeneration_seconds: 5
-    absorption_level: 1
-    absorption_seconds: 120
-  golden_potato:
-    regeneration_level: 1
-    regeneration_seconds: 3
-    absorption_level: 1
-    absorption_seconds: 30
-
-# Kill streaks: consecutive player kills without dying. Each tier is a regeneration buff and
-# a glowing debuff on the killer. The key is the streak count that triggers the tier.
+kill_weapon_window_seconds: 15
+marked_deaths: 5
+overlord:
+  slow_ticks: 60
+  cooldown_seconds: 60
+  knockback: 1.8
+  lift: 1.4
+  range: 20.0
+  shockwave_damage: 6.0
+  storm_steps: 50
+  strike_every_steps: 3
+plane:
+  bomb_power: 3.0
+  speed: 0.9
+potato_of_life_on_player_kill: true
+safezone:
+  combat_seconds: 30
+sq:
+  cooldown: 15
+  damage: 16
+  max_height: 30
+  radius: 4
+  range: 40
+  speed: 1.8
 streaks:
-  victim_repeat_cooldown_seconds: 300
   tiers:
     "3":
       buff: {regeneration_level: 1, regeneration_seconds: 20}
@@ -49,49 +145,99 @@ streaks:
     "12":
       buff: {regeneration_level: 3, regeneration_seconds: 30}
       debuff: {glowing_seconds: 180}
-
-# Tuff Snowball: thrown, it flies briefly, then a rain of TNT minecarts, anvils, and dripstone falls.
+  victim_repeat_cooldown_seconds: 300
 tuff_snowball:
-  throw_speed: 1.5
-  release_seconds: 1.0
-  rain_seconds: 3
+  anvil_max_damage: 40
+  blast_max_damage: 20
+  blast_power: 3.0
+  blast_radius: 4
+  dripstone_max_damage: 20
+  rain_height: 20
   rain_interval_ticks: 4
   rain_radius: 6
-  rain_height: 20
-  lifespan_seconds: 15
+  throw_speed: 2.2
   weights:
-    tnt_minecart: 50
     anvil: 25
     pointed_dripstone: 25
-  # TNT minecart landing: area damage, falling off to zero at blast_radius. No block damage.
-  blast_radius: 4
-  blast_max_damage: 20
-  anvil_damage_per_block: 2
-  anvil_max_damage: 40
-  dripstone_damage_per_block: 2
-  dripstone_max_damage: 20
-
-# Potato A5 Strike (normal and enchanted). Launches you above the nearest player and slams down.
-a5:
-  range: 10
-  launch_height: 12
-  max_air_ticks: 120
-  normal_damage: 10
-  enchanted_damage: 16
-  radius: 3
-  cooldown_normal: 25
-  cooldown_enchanted: 40
-
-# Potato Wand: damage per bolt (never kills in one hit).
+    tnt_minecart: 50
 wand:
   damage: 9
 
-# Potato A5 Strike: range is how far it searches for a target (players first, then mobs).
-a5:
-  range: 20
-  launch_height: 16
-  radius: 5.5
-  normal_damage: 10
-  enchanted_damage: 16
-  cooldown_normal: 25
-  cooldown_enchanted: 40
+# Item overrides. Any item can have its material, name, lore, and colours changed here. Example:
+#
+# items:
+#   POTATO_SWORD:
+#     material: NETHERITE_SWORD
+#     name: "<gradient:#7FFF00:#32CD32><bold>Potato Sword</bold></gradient>"
+#     colors: ["#7FFF00", "#32CD32"]
+#     lore:
+#       - "Kill a Marked player with it to forge the Warrior's Blade."
+#
+# Changing an item's material makes existing copies of that item invalid, so they are removed.
+
+
+# Hierarchy Hammer. Chances are between 0 and 1 (0.20 = 20%). Durations are in ticks (20 = 1 second).
+hammer:
+  lightning_chance: 0.20
+  shockwave_radius: 4.0
+  shockwave_damage: 6.0
+  lifesteal_ticks: 40
+  hierarchy_chance: 0.05
+  hierarchy_height: 4.0
+  kill_damage: 4.0
+  max_arrows: 30
+  aimlock_multiplier: 1.5
+  aim_angle: 30
+  aim_range: 14
+
+# Passive effects. Each item gives one potion effect while held (either hand) or worn (armor).
+# Format: EFFECT_NAME:level, where level 0 is level I. Remove a line to use the built-in default.
+passives:
+  duration_ticks: 60
+  POTATO_OF_LIFE: "HEALTH_BOOST:0"
+  GOLDEN_POTATO: "ABSORPTION:0"
+  POTATO_SWORD: "STRENGTH:0"
+  WARRIORS_BLADE: "STRENGTH:1"
+  POTATO_HOE: "HASTE:0"
+  POTATO_PICKAXE: "HASTE:0"
+  POTATO_SHOVEL: "HASTE:0"
+  POTATO_AXE: "SPEED:0"
+  POTATO_SPEAR: "SPEED:0"
+  POTATO_BOW: "SPEED:0"
+  POTATO_MACE: "RESISTANCE:0"
+  POTATO_SHIELD: "RESISTANCE:0"
+  POTATO_CHARM: "LUCK:0"
+  POTATO_WARD: "FIRE_RESISTANCE:0"
+  POTATO_LANTERN: "NIGHT_VISION:0"
+  POTATO_COMPASS: "DOLPHINS_GRACE:0"
+  POTATO_FEATHER: "SLOW_FALLING:0"
+  POTATO_SCROLL: "CONDUIT_POWER:0"
+  POTATO_SLIME: "JUMP_BOOST:0"
+  POTATO_GHAST: "REGENERATION:0"
+  POTATO_BLAZE: "STRENGTH:0"
+  POTATO_QUARTZ: "WATER_BREATHING:0"
+  POTATO_ECHO: "HERO_OF_THE_VILLAGE:0"
+  POTATO_A5_STRIKE: "JUMP_BOOST:0"
+  ENCHANTED_POTATO_A5_STRIKE: "JUMP_BOOST:1"
+
+# Durations, in ticks (20 = 1 second), for the potion effects that abilities and items give.
+durations:
+  a5:
+    resistance_ticks: 60
+  soup:
+    regeneration_ticks: 100
+  charm:
+    luck_ticks: 400
+    absorption_ticks: 300
+  ward:
+    resistance_ticks: 160
+  quartz:
+    glow_ticks: 160
+  compass:
+    glow_ticks: 200
+  scroll:
+    glow_ticks: 200
+  mace:
+    glacial_hold_ticks: 40
+  frost_hammer:
+    slow_ticks: 40
