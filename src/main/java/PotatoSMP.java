@@ -93,6 +93,20 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.inventory.meta.SkullMeta;
+import org.bukkit.entity.TextDisplay;
+import org.bukkit.event.entity.EntityTargetEvent;
+import org.bukkit.entity.Mob;
+import org.bukkit.entity.Phantom;
+import org.bukkit.entity.Vehicle;
+import org.bukkit.event.player.PlayerDropItemEvent;
+import org.bukkit.event.vehicle.VehicleExitEvent;
+import org.bukkit.entity.Boat;
+import net.kyori.adventure.title.Title;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.event.Cancellable;
 import org.bukkit.entity.ItemDisplay;
 import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.attribute.AttributeInstance;
@@ -124,6 +138,11 @@ public final class PotatoSMP extends JavaPlugin {
     private SecondAbilities secondAbilities;
     private WeaponPassives weaponPassives;
     private RecipeMenu recipeMenu;
+    private SqDisengagerListener sqDisengager;
+    private SafezoneManager safezones;
+    private PlaneManager planes;
+    private BomberManager bombers;
+    private HierarchyManager hierarchy;
     private PotatoRerollerListener reroller;
     private OverlordListener overlord;
 
@@ -145,6 +164,11 @@ public final class PotatoSMP extends JavaPlugin {
         secondAbilities = new SecondAbilities(this);
         weaponPassives = new WeaponPassives(this);
         recipeMenu = new RecipeMenu(this);
+        sqDisengager = new SqDisengagerListener(this);
+        safezones = new SafezoneManager(this);
+        planes = new PlaneManager(this);
+        bombers = new BomberManager(this);
+        hierarchy = new HierarchyManager(this);
         reroller = new PotatoRerollerListener(this);
         overlord = new OverlordListener(this);
 
@@ -162,6 +186,28 @@ public final class PotatoSMP extends JavaPlugin {
         getServer().getPluginManager().registerEvents(secondAbilities, this);
         getServer().getPluginManager().registerEvents(weaponPassives, this);
         getServer().getPluginManager().registerEvents(recipeMenu, this);
+        getServer().getPluginManager().registerEvents(sqDisengager, this);
+        getServer().getPluginManager().registerEvents(safezones, this);
+        getServer().getPluginManager().registerEvents(planes, this);
+        getServer().getPluginManager().registerEvents(bombers, this);
+        getServer().getPluginManager().registerEvents(hierarchy, this);
+        HierarchyCommand hierarchyCommand = new HierarchyCommand(this);
+        PluginCommand hierarchyCmd = getCommand("hierarchyhammer");
+        if (hierarchyCmd != null) {
+            hierarchyCmd.setExecutor(hierarchyCommand);
+        }
+        PluginCommand leaderboardCmd = getCommand("leaderboard");
+        if (leaderboardCmd != null) {
+            leaderboardCmd.setExecutor(hierarchyCommand);
+        }
+        PluginCommand wandCommand = getCommand("safezonewand");
+        if (wandCommand != null) {
+            wandCommand.setExecutor(safezones);
+        }
+        PluginCommand confirmCommand = getCommand("confirm");
+        if (confirmCommand != null) {
+            confirmCommand.setExecutor(safezones);
+        }
         getServer().getPluginManager().registerEvents(reroller, this);
         getServer().getPluginManager().registerEvents(overlord, this);
         passives.start();
@@ -225,7 +271,21 @@ public final class PotatoSMP extends JavaPlugin {
         }
     }
 
+    /** True if either player trusts the other. Non-players are never trusted. */
+    public boolean trustedBetween(UUID source, org.bukkit.entity.Entity target) {
+        if (!(target instanceof Player other) || source == null) {
+            return false;
+        }
+        return data.trusted(source).contains(other.getUniqueId().toString())
+                || data.trusted(other.getUniqueId()).contains(source.toString());
+    }
+
     /** True when the plugin is switched on, or when the actor is an operator (potato.admin). */
+    /** True when this player is a non-operator standing in a safezone. */
+    public boolean inSafezone(Player player) {
+        return safezones != null && safezones.restricted(player, player.getLocation());
+    }
+
     public boolean activeFor(Object actor) {
         if (isPotatoFeatureEnabled()) {
             return true;
@@ -241,6 +301,10 @@ public final class PotatoSMP extends JavaPlugin {
 
     public void setNoCooldowns(boolean value) {
         data.setNoCooldowns(value);
+    }
+
+    public HierarchyManager hierarchy() {
+        return hierarchy;
     }
 
     public DataStore data() {
@@ -323,7 +387,7 @@ final class A5Manager implements Listener {
 
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
-        if (!plugin.activeFor(event.getPlayer())) {
+        if (!plugin.activeFor(event.getPlayer()) || plugin.inSafezone(event.getPlayer())) {
             return;
         }
         if (event.getHand() != EquipmentSlot.HAND) {
@@ -334,8 +398,7 @@ final class A5Manager implements Listener {
             return;
         }
         Items.Kind kind = plugin.items().kindOf(event.getItem());
-        if (kind != Items.Kind.POTATO_A5_STRIKE && kind != Items.Kind.ENCHANTED_POTATO_A5_STRIKE
-                && kind != Items.Kind.SQ_DISENGAGER) {
+        if (kind != Items.Kind.POTATO_A5_STRIKE && kind != Items.Kind.ENCHANTED_POTATO_A5_STRIKE) {
             return;
         }
         event.setCancelled(true);
@@ -535,6 +598,9 @@ final class A5Manager implements Listener {
             }
             double distance = living.getLocation().distance(center);
             double closeness = 1.0 - (distance / radius);
+            if (plugin.trustedBetween(caster.getUniqueId(), living)) {
+                continue;
+            }
             // No source: a blast is never credited to the user, so it can't soul-ban or build streaks.
             living.damage(damage * (0.5 + 0.5 * closeness));
             Vector out = living.getLocation().toVector().subtract(center.toVector()).setY(0);
@@ -546,7 +612,7 @@ final class A5Manager implements Listener {
         }
 
         // Passive: a short Resistance I after every slam.
-        caster.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 60, 0, false, true, true));
+        caster.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, plugin.getConfig().getInt("durations.a5.resistance_ticks", 60), 0, false, true, true));
     }
 
     /** Steers at the centre of the target's hitbox, so the slam lands on the body, not the feet. */
@@ -689,7 +755,7 @@ final class BladeManager {
 
 final class PotatoCommand implements CommandExecutor, TabCompleter {
 
-    private static final List<String> SUBCOMMANDS = List.of("help", "menu", "status", "blade", "give", "reload", "enable", "disable", "stop", "recipes", "recipe", "nocooldown");
+    private static final List<String> SUBCOMMANDS = List.of("help", "menu", "status", "blade", "give", "reload", "enable", "disable", "stop", "recipes", "recipe", "nocooldown", "trust");
     private static final List<String> GIVE_KINDS = java.util.Arrays.stream(Items.Kind.values())
             .filter(kind -> kind != Items.Kind.WARRIORS_BLADE)
             .map(kind -> kind.name().toLowerCase(Locale.ROOT))
@@ -703,6 +769,12 @@ final class PotatoCommand implements CommandExecutor, TabCompleter {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        String sub = args.length == 0 ? "help" : args[0].toLowerCase(Locale.ROOT);
+        boolean open = sub.equals("recipes") || sub.equals("recipe") || sub.equals("trust");
+        if (!open && !sender.hasPermission("potato.admin")) {
+            deny(sender);
+            return true;
+        }
         if (args.length == 0 || args[0].equalsIgnoreCase("help")) {
             sendHelp(sender);
             return true;
@@ -721,6 +793,7 @@ final class PotatoCommand implements CommandExecutor, TabCompleter {
             case "enable" -> setEnabled(sender, true);
             case "disable" -> setEnabled(sender, false);
             case "stop" -> stop(sender);
+            case "trust" -> trust(sender, args);
             case "nocooldown" -> noCooldown(sender, args);
             case "recipes", "recipe" -> {
                 if (sender instanceof Player player) {
@@ -860,6 +933,32 @@ final class PotatoCommand implements CommandExecutor, TabCompleter {
         }
         plugin.setPotatoFeatureEnabled(value);
         sender.sendMessage(Text.msg(value ? "<green>Potato SMP enabled." : "<yellow>Potato SMP disabled."));
+    }
+
+    private void trust(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(Text.msg("<red>Only players can trust other players."));
+            return;
+        }
+        if (args.length < 2) {
+            sender.sendMessage(Text.msg("<red>Usage: /potatosmp trust <player>"));
+            return;
+        }
+        OfflinePlayer target = Bukkit.getOfflinePlayerIfCached(args[1]);
+        if (target == null) {
+            sender.sendMessage(Text.msg("<red>Unknown player: " + Text.esc(args[1])));
+            return;
+        }
+        List<String> trusted = new ArrayList<>(plugin.data().trusted(player.getUniqueId()));
+        String id = target.getUniqueId().toString();
+        if (trusted.contains(id)) {
+            trusted.remove(id);
+            sender.sendMessage(Text.msg("<yellow>" + Text.esc(args[1]) + " is no longer trusted."));
+        } else {
+            trusted.add(id);
+            sender.sendMessage(Text.msg("<green>" + Text.esc(args[1]) + " is now trusted. Your hammer moves won't hit them."));
+        }
+        plugin.data().setTrusted(player.getUniqueId(), trusted);
     }
 
     private void noCooldown(CommandSender sender, String[] args) {
@@ -1045,6 +1144,57 @@ final class DataStore {
         save();
     }
 
+    public List<String> safezones() {
+        return yml.getStringList("safezones");
+    }
+
+    public void setSafezones(List<String> value) {
+        yml.set("safezones", value);
+        save();
+    }
+
+    public void addKill(UUID id) {
+        yml.set("kills." + id, kills(id) + 1);
+        save();
+    }
+
+    public int kills(UUID id) {
+        return yml.getInt("kills." + id, 0);
+    }
+
+    public Map<UUID, Integer> allKills() {
+        Map<UUID, Integer> result = new HashMap<>();
+        ConfigurationSection section = yml.getConfigurationSection("kills");
+        if (section == null) {
+            return result;
+        }
+        for (String key : section.getKeys(false)) {
+            UUID id = parseUuid(key);
+            if (id != null) {
+                result.put(id, section.getInt(key, 0));
+            }
+        }
+        return result;
+    }
+
+    public String altar() {
+        return yml.getString("altar");
+    }
+
+    public void setAltar(String value) {
+        yml.set("altar", value);
+        save();
+    }
+
+    public List<String> trusted(UUID owner) {
+        return yml.getStringList("trust." + owner);
+    }
+
+    public void setTrusted(UUID owner, List<String> value) {
+        yml.set("trust." + owner, value);
+        save();
+    }
+
     public boolean noCooldowns() {
         return yml.getBoolean("no_cooldowns", false);
     }
@@ -1153,7 +1303,7 @@ final class FoodListener implements Listener {
 
     @EventHandler
     public void onConsume(PlayerItemConsumeEvent event) {
-        if (!plugin.activeFor(event.getPlayer())) {
+        if (!plugin.activeFor(event.getPlayer()) || plugin.inSafezone(event.getPlayer())) {
             return;
         }
         Items.Kind kind = plugin.items().kindOf(event.getItem());
@@ -1162,7 +1312,7 @@ final class FoodListener implements Listener {
         } else if (kind == Items.Kind.GOLDEN_POTATO) {
             apply(event.getPlayer(), "effects.golden_potato");
         } else if (kind == Items.Kind.POTATO_SOUP) {
-            event.getPlayer().addPotionEffect(new PotionEffect(PotionEffectType.REGENERATION, 100, 0, false, true, true));
+            event.getPlayer().addPotionEffect(new PotionEffect(PotionEffectType.REGENERATION, plugin.getConfig().getInt("durations.soup.regeneration_ticks", 100), 0, false, true, true));
         }
     }
 
@@ -1384,7 +1534,22 @@ final class Items {
                 "It is never crafted, and it is gone once used."),
         SQ_DISENGAGER(Material.FIREWORK_STAR, "SQ Disengager",
                 "KNUCKLE BOOM INTO THE SKY AND GROUND SLAM.",
-                "Right-click: launch up, then slam down. No fall damage."),
+                "Right-click to aim, right-click again to dive. No damage while diving."),
+        A_PLANE(Material.OAK_BOAT, "A Plane",
+                "Operators only. Right-click to climb in and fly.",
+                "Press Q while flying to drop a TNT minecart. Each drop uses one Firework Star."),
+        BOMBER_SUMMONER(Material.RED_DYE, "Bomber Summoner",
+                "Operators only. Right-click to summon a bomber.",
+                "A phantom formation that flies where you look and drops TNT minecarts."),
+        BOMBER_STOPPER(Material.STONE_BUTTON, "Bomber Stopper",
+                "Operators only. Right-click to stop your bomber.",
+                "The bomber is removed."),
+        HIERARCHY_HAMMER(Material.MACE, "Hierarchy Hammer",
+                "Right-click to slam. Sneak + right-click to aim-lock the nearest player.",
+                "Hits heal you. Being hit can put you above your attacker."),
+        EMBER_HAMMER(Material.MACE, "Ember Hammer", "Hits set the target on fire."),
+        FROST_HAMMER(Material.MACE, "Frost Hammer", "Hits slow the target."),
+        TIDE_HAMMER(Material.MACE, "Tide Hammer", "Hits knock the target back."),
         POTATO_OF_LIFE(Material.POTATO, "Potato of Life", "Eat it for Regeneration II (5 s) and Absorption I (2 min).", "Dropped when a player kills another player.", "Passive: Health Boost I while held in either hand."),
         GOLDEN_POTATO(Material.POTATO, "Golden Potato", "A cheaper golden apple.", "Eat it for Regeneration I (3 s) and Absorption I (30 s).", "Passive: Absorption I while held in either hand."),
         POTATO_ORE(Material.RAW_GOLD, "Potato Ore", "Crafting and smithing ingredient.", "Used in potato tools, the mace, spear, bow, shield, and A5 Strike."),
@@ -1416,15 +1581,33 @@ final class Items {
             this.lore = lore;
         }
 
+        private String override(String key) {
+            org.bukkit.configuration.file.FileConfiguration cfg = config.get();
+            return cfg == null ? null : cfg.getString("items." + name() + "." + key);
+        }
+
+        /** Material from config.yml (items.<KIND>.material), or the built-in one. */
         public Material material() {
-            return material;
+            String raw = override("material");
+            Material chosen = raw == null ? null : Material.matchMaterial(raw);
+            return chosen != null ? chosen : material;
         }
 
+        /** Name from config.yml (items.<KIND>.name), or the built-in one. */
         public String displayName() {
-            return displayName;
+            String raw = override("name");
+            return raw != null ? raw : displayName;
         }
 
+        /** Lore from config.yml (items.<KIND>.lore), or the built-in lines. */
         public String[] lore() {
+            org.bukkit.configuration.file.FileConfiguration cfg = config.get();
+            if (cfg != null) {
+                List<String> fromConfig = cfg.getStringList("items." + name() + ".lore");
+                if (!fromConfig.isEmpty()) {
+                    return fromConfig.toArray(new String[0]);
+                }
+            }
             return lore;
         }
 
@@ -1450,7 +1633,8 @@ final class Items {
                 case POTATO_CHARM -> "Sneak + right-click: Fortune Drop, dropping a Potato of Life at your feet. 40 s cooldown.";
                 case POTATO_WARD -> "Sneak + right-click: Ward Ring, pushing enemies out within 6 blocks. 30 s cooldown.";
                 case POTATO_SLIME, POTATO_GHAST, POTATO_BLAZE, POTATO_QUARTZ, POTATO_ECHO -> "";
-                case SQ_DISENGAGER -> "";
+                case SQ_DISENGAGER, A_PLANE, BOMBER_SUMMONER, BOMBER_STOPPER, HIERARCHY_HAMMER, EMBER_HAMMER,
+                        FROST_HAMMER, TIDE_HAMMER -> "";
                 case POTATO_COMPASS -> "Sneak + right-click: Lodestone, glowing players within 30 blocks. 25 s cooldown.";
                 case POTATO_FEATHER -> "Sneak + right-click: Gust, launching you up and pushing enemies within 4 blocks. 15 s cooldown.";
                 case POTATO_SCROLL -> "Sneak + right-click: Reveal, glowing players within 40 blocks and counting mobs. 30 s cooldown.";
@@ -1472,6 +1656,13 @@ final class Items {
 
         /** The two gradient colours for this item's name. */
         public String[] colors() {
+            org.bukkit.configuration.file.FileConfiguration cfg = config.get();
+            if (cfg != null) {
+                List<String> fromConfig = cfg.getStringList("items." + name() + ".colors");
+                if (fromConfig.size() >= 2) {
+                    return new String[] {fromConfig.get(0), fromConfig.get(1)};
+                }
+            }
             return switch (this) {
                 case POTATO_SLIME -> new String[] {"#A5D6A7", "#2E7D32"};
                 case POTATO_GHAST -> new String[] {"#F5F5F5", "#9E9E9E"};
@@ -1484,6 +1675,13 @@ final class Items {
                 case POTATO_FEATHER -> new String[] {"#F5F5F5", "#B0BEC5"};
                 case POTATO_SCROLL -> new String[] {"#FFE0B2", "#A1887F"};
                 case SQ_DISENGAGER -> new String[] {"#FFD700", "#FF8C00"};
+                case A_PLANE -> new String[] {"#90CAF9", "#1565C0"};
+                case HIERARCHY_HAMMER -> new String[] {"#FFD54F", "#FF6F00"};
+                case EMBER_HAMMER -> new String[] {"#FF8A65", "#BF360C"};
+                case FROST_HAMMER -> new String[] {"#B3E5FC", "#0277BD"};
+                case TIDE_HAMMER -> new String[] {"#80DEEA", "#00838F"};
+                case BOMBER_SUMMONER -> new String[] {"#FF5252", "#B71C1C"};
+                case BOMBER_STOPPER -> new String[] {"#BDBDBD", "#616161"};
                 case POTATO_REROLLER -> new String[] {"#FF9CF0", "#7D3C98"};
                 case POTATO_WAND -> new String[] {"#E0B0FF", "#7B1FA2"};
                 case POTATO_CHARM -> new String[] {"#7CFC00", "#00C853"};
@@ -1518,12 +1716,16 @@ final class Items {
         }
     }
 
+    /** Where item overrides are read from. Set once the plugin loads. */
+    static java.util.function.Supplier<org.bukkit.configuration.file.FileConfiguration> config = () -> null;
+
     private final NamespacedKey kindKey;
     private final NamespacedKey uidKey;
     private final NamespacedKey damageKey;
     private final NamespacedKey speedKey;
 
     public Items(Plugin plugin) {
+        config = plugin::getConfig;
         this.kindKey = new NamespacedKey(plugin, "kind");
         this.uidKey = new NamespacedKey(plugin, "uid");
         this.damageKey = new NamespacedKey(plugin, "netherite_damage");
@@ -1706,6 +1908,12 @@ final class CombatListener implements Listener {
         }
 
         plugin.streaks().onPlayerKill(killer, victimId);
+        plugin.data().addKill(killer.getUniqueId());
+        ItemStack head = new ItemStack(Material.PLAYER_HEAD);
+        SkullMeta headMeta = (SkullMeta) head.getItemMeta();
+        headMeta.setOwningPlayer(victim);
+        head.setItemMeta(headMeta);
+        event.getDrops().add(head);
 
         if (plugin.getConfig().getBoolean("potato_of_life_on_player_kill", true)) {
             event.getDrops().add(plugin.items().create(Items.Kind.POTATO_OF_LIFE));
@@ -2047,6 +2255,46 @@ final class OwnerGuard implements Listener {
                 || plugin.secondAbilities().isGroundBreaking(player.getUniqueId()))) {
             event.setCancelled(true);
         }
+    }
+
+    /**
+     * Trusted players can't hurt each other with any Potato SMP move. Projectiles, bombs, and explosions
+     * count as the player who sent them. Trust works both ways.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onTrustedDamage(EntityDamageByEntityEvent event) {
+        if (!(event.getEntity() instanceof Player victim)) {
+            return;
+        }
+        UUID attacker = attackerOf(event.getDamager());
+        if (attacker == null || attacker.equals(victim.getUniqueId())) {
+            return;
+        }
+        if (trusts(attacker, victim.getUniqueId()) || trusts(victim.getUniqueId(), attacker)) {
+            event.setCancelled(true);
+        }
+    }
+
+    private UUID attackerOf(Entity damager) {
+        if (damager instanceof Player player) {
+            return player.getUniqueId();
+        }
+        if (damager instanceof Projectile projectile && projectile.getShooter() instanceof Player shooter) {
+            return shooter.getUniqueId();
+        }
+        String tag = damager.getPersistentDataContainer().get(ownerKey, PersistentDataType.STRING);
+        if (tag == null) {
+            return null;
+        }
+        try {
+            return UUID.fromString(tag);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private boolean trusts(UUID truster, UUID other) {
+        return plugin.data().trusted(truster).contains(other.toString());
     }
 
     /** SQ Disengager: no damage of any kind while the slam is active. */
@@ -2391,7 +2639,7 @@ final class TuffSnowballManager implements Listener {
 
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
-        if (!plugin.activeFor(event.getPlayer())) {
+        if (!plugin.activeFor(event.getPlayer()) || plugin.inSafezone(event.getPlayer())) {
             return;
         }
         if (event.getHand() != EquipmentSlot.HAND) {
@@ -2582,7 +2830,7 @@ final class TuffSnowballManager implements Listener {
             }
             double distance = target.getLocation().distance(center);
             double damage = maxDamage * (1.0 - distance / radius);
-            if (damage <= 0) {
+            if (damage <= 0 || plugin.trustedBetween(thrower, target)) {
                 continue;
             }
             target.damage(damage);
@@ -2774,7 +3022,7 @@ final class PassiveManager implements Listener {
     private void tick() {
         Items items = plugin.items();
         for (Player player : Bukkit.getOnlinePlayers()) {
-            if (!plugin.activeFor(player)) {
+            if (!plugin.activeFor(player) || plugin.inSafezone(player)) {
                 continue;
             }
             Items.Kind main = items.kindOf(player.getInventory().getItemInMainHand());
@@ -2812,38 +3060,62 @@ final class PassiveManager implements Listener {
         }
     }
 
+    /** The built-in passive for each item, as "EFFECT:level". config.yml can replace any of them. */
+    private static String defaultPassive(Items.Kind kind) {
+        return switch (kind) {
+            case POTATO_OF_LIFE -> "HEALTH_BOOST:0";
+            case GOLDEN_POTATO -> "ABSORPTION:0";
+            case POTATO_SWORD -> "STRENGTH:0";
+            case WARRIORS_BLADE -> "STRENGTH:1";
+            case POTATO_HOE -> "HASTE:0";
+            case POTATO_PICKAXE -> "HASTE:0";
+            case POTATO_SHOVEL -> "HASTE:0";
+            case POTATO_AXE -> "SPEED:0";
+            case POTATO_SPEAR -> "SPEED:0";
+            case POTATO_BOW -> "SPEED:0";
+            case POTATO_MACE -> "RESISTANCE:0";
+            case POTATO_SHIELD -> "RESISTANCE:0";
+            case POTATO_CHARM -> "LUCK:0";
+            case POTATO_WARD -> "FIRE_RESISTANCE:0";
+            case POTATO_LANTERN -> "NIGHT_VISION:0";
+            case POTATO_COMPASS -> "DOLPHINS_GRACE:0";
+            case POTATO_FEATHER -> "SLOW_FALLING:0";
+            case POTATO_SCROLL -> "CONDUIT_POWER:0";
+            case POTATO_SLIME -> "JUMP_BOOST:0";
+            case POTATO_GHAST -> "REGENERATION:0";
+            case POTATO_BLAZE -> "STRENGTH:0";
+            case POTATO_QUARTZ -> "WATER_BREATHING:0";
+            case POTATO_ECHO -> "HERO_OF_THE_VILLAGE:0";
+            case POTATO_A5_STRIKE -> "JUMP_BOOST:0";
+            case ENCHANTED_POTATO_A5_STRIKE -> "JUMP_BOOST:1";
+            default -> null;
+        };
+    }
+
+    /** Gives the held item's passive. Effect and level come from passives.<KIND> in config.yml. */
     private void addPassive(Player player, Items.Kind kind) {
         if (kind == null) {
             return;
         }
-        switch (kind) {
-            case POTATO_OF_LIFE -> apply(player, PotionEffectType.HEALTH_BOOST, 0);
-            case GOLDEN_POTATO -> apply(player, PotionEffectType.ABSORPTION, 0);
-            case POTATO_SWORD -> apply(player, PotionEffectType.STRENGTH, 0);
-            case WARRIORS_BLADE -> apply(player, PotionEffectType.STRENGTH, 1);
-            case POTATO_HOE, POTATO_PICKAXE, POTATO_SHOVEL -> apply(player, PotionEffectType.HASTE, 0);
-            case POTATO_AXE, POTATO_SPEAR, POTATO_BOW -> apply(player, PotionEffectType.SPEED, 0);
-            case POTATO_MACE, POTATO_SHIELD -> apply(player, PotionEffectType.RESISTANCE, 0);
-            case POTATO_A5_STRIKE -> apply(player, PotionEffectType.JUMP_BOOST, 0);
-            case ENCHANTED_POTATO_A5_STRIKE -> apply(player, PotionEffectType.JUMP_BOOST, 1);
-            case POTATO_CHARM -> apply(player, PotionEffectType.LUCK, 0);
-            case POTATO_WARD -> apply(player, PotionEffectType.FIRE_RESISTANCE, 0);
-            case POTATO_LANTERN -> apply(player, PotionEffectType.NIGHT_VISION, 0);
-            case POTATO_COMPASS -> apply(player, PotionEffectType.DOLPHINS_GRACE, 0);
-            case POTATO_FEATHER -> apply(player, PotionEffectType.SLOW_FALLING, 0);
-            case POTATO_SCROLL -> apply(player, PotionEffectType.CONDUIT_POWER, 0);
-            case POTATO_SLIME -> apply(player, PotionEffectType.JUMP_BOOST, 0);
-            case POTATO_GHAST -> apply(player, PotionEffectType.REGENERATION, 0);
-            case POTATO_BLAZE -> apply(player, PotionEffectType.STRENGTH, 0);
-            case POTATO_QUARTZ -> apply(player, PotionEffectType.WATER_BREATHING, 0);
-            case POTATO_ECHO -> apply(player, PotionEffectType.HERO_OF_THE_VILLAGE, 0);
-            default -> {
+        String value = plugin.getConfig().getString("passives." + kind.name(), defaultPassive(kind));
+        if (value == null) {
+            return;
+        }
+        try {
+            String[] parts = value.split(":");
+            PotionEffectType type = PotionEffectType.getByName(parts[0].trim().toUpperCase(Locale.ROOT));
+            int level = parts.length > 1 ? Integer.parseInt(parts[1].trim()) : 0;
+            if (type != null) {
+                apply(player, type, level);
             }
+        } catch (NumberFormatException ex) {
+            plugin.getLogger().warning("Bad passive for " + kind.name() + ": " + value);
         }
     }
 
-    private static void apply(Player player, PotionEffectType type, int amplifier) {
-        player.addPotionEffect(new PotionEffect(type, 60, amplifier, false, false, true));
+    private void apply(Player player, PotionEffectType type, int amplifier) {
+        int duration = plugin.getConfig().getInt("passives.duration_ticks", 60);
+        player.addPotionEffect(new PotionEffect(type, duration, amplifier, false, false, true));
     }
 
     private boolean wearsPotatoArmor(Player player) {
@@ -2937,7 +3209,7 @@ final class ItemAbilities implements Listener {
 
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
-        if (!plugin.activeFor(event.getPlayer())) {
+        if (!plugin.activeFor(event.getPlayer()) || plugin.inSafezone(event.getPlayer())) {
             return;
         }
         if (event.getHand() != EquipmentSlot.HAND) {
@@ -3016,8 +3288,8 @@ final class ItemAbilities implements Listener {
     }
 
     private void luckySurge(Player player, Items.Kind kind, double cooldownSeconds) {
-        player.addPotionEffect(new PotionEffect(PotionEffectType.LUCK, 20 * 20, 1, false, true, true));
-        player.addPotionEffect(new PotionEffect(PotionEffectType.ABSORPTION, 15 * 20, 1, false, true, true));
+        player.addPotionEffect(new PotionEffect(PotionEffectType.LUCK, plugin.getConfig().getInt("durations.charm.luck_ticks", 400), 1, false, true, true));
+        player.addPotionEffect(new PotionEffect(PotionEffectType.ABSORPTION, plugin.getConfig().getInt("durations.charm.absorption_ticks", 300), 1, false, true, true));
         World world = player.getWorld();
         Location at = player.getLocation();
         for (int i = 0; i < 24; i++) {
@@ -3031,7 +3303,7 @@ final class ItemAbilities implements Listener {
 
     /** An 8 second bubble: you get Resistance II, and enemies inside are pushed out. */
     private void wardBubble(Player player, Items.Kind kind, double cooldownSeconds) {
-        player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, 8 * 20, 1, false, true, true));
+        player.addPotionEffect(new PotionEffect(PotionEffectType.RESISTANCE, plugin.getConfig().getInt("durations.ward.resistance_ticks", 160), 1, false, true, true));
         player.getWorld().playSound(player.getLocation(), Sound.BLOCK_BEACON_ACTIVATE, 1.0f, 1.2f);
         startCooldown(player, kind, cooldownSeconds);
         new BukkitRunnable() {
@@ -3082,7 +3354,7 @@ final class SecondAbilities implements Listener {
 
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
-        if (!plugin.activeFor(event.getPlayer())) {
+        if (!plugin.activeFor(event.getPlayer()) || plugin.inSafezone(event.getPlayer())) {
             return;
         }
         if (event.getHand() != EquipmentSlot.HAND) {
@@ -3108,7 +3380,7 @@ final class SecondAbilities implements Listener {
 
     @EventHandler
     public void onSwap(PlayerSwapHandItemsEvent event) {
-        if (!plugin.activeFor(event.getPlayer())) {
+        if (!plugin.activeFor(event.getPlayer()) || plugin.inSafezone(event.getPlayer())) {
             return;
         }
         Player player = event.getPlayer();
@@ -3143,144 +3415,154 @@ final class SecondAbilities implements Listener {
     }
 
     /** Does the ability. Returns its cooldown in seconds, or 0 if nothing happened. */
+    /** One ability value from config.yml (abilities.<KIND>.<key>), or the built-in default. */
+    private double num(Items.Kind kind, String key, double defaultValue) {
+        return plugin.getConfig().getDouble("abilities." + kind.name() + "." + key, defaultValue);
+    }
+
+    /** The ability's cooldown from config.yml (abilities.<KIND>.cooldown), or the built-in default. */
+    private double cooldown(Items.Kind kind, double defaultSeconds) {
+        return plugin.getConfig().getDouble("abilities." + kind.name() + ".cooldown", defaultSeconds);
+    }
+
     private double perform(Player player, Items.Kind kind) {
         switch (kind) {
             case POTATO_OF_LIFE -> {
-                heal(player, 8.0);
-                return 60;
+                heal(player, num(Items.Kind.POTATO_OF_LIFE, "heal", 8.0));
+                return cooldown(Items.Kind.POTATO_OF_LIFE, 60);
             }
             case GOLDEN_POTATO -> {
                 for (Player ally : Bukkit.getOnlinePlayers()) {
                     if (ally.getWorld().equals(player.getWorld())
                             && ally.getLocation().distance(player.getLocation()) <= 8.0) {
-                        heal(ally, 6.0);
+                        heal(ally, num(Items.Kind.GOLDEN_POTATO, "heal", 6.0));
                     }
                 }
-                push(player, 7.0, 1.0);
-                return 30;
+                push(player, num(Items.Kind.GOLDEN_POTATO, "radius", 7.0), num(Items.Kind.GOLDEN_POTATO, "strength", 1.0));
+                return cooldown(Items.Kind.GOLDEN_POTATO, 30);
             }
             case POTATO_SWORD -> {
                 slash(player);
-                return 8;
+                return cooldown(Items.Kind.POTATO_SWORD, 8);
             }
             case WARRIORS_BLADE -> {
                 int hits = 0;
-                for (LivingEntity e : nearby(player, 9.0)) {
-                    e.damage(8.0, player);
+                for (LivingEntity e : nearby(player, num(Items.Kind.WARRIORS_BLADE, "radius", 9.0))) {
+                    e.damage(num(Items.Kind.WARRIORS_BLADE, "damage", 8.0), player);
                     hits++;
                 }
                 heal(player, 2.0 * hits);
                 player.getWorld().spawnParticle(Particle.SOUL, player.getLocation().add(0, 1, 0), 40, 2.0, 0.5, 2.0, 0.05);
                 player.getWorld().playSound(player.getLocation(), Sound.ENTITY_WITHER_SHOOT, 0.8f, 1.4f);
-                return 25;
+                return cooldown(Items.Kind.WARRIORS_BLADE, 25);
             }
             case POTATO_HOE -> {
                 grow(player, 8);
-                return 30;
+                return cooldown(Items.Kind.POTATO_HOE, 30);
             }
             case POTATO_PICKAXE -> {
                 veinVision(player);
-                return 30;
+                return cooldown(Items.Kind.POTATO_PICKAXE, 30);
             }
             case POTATO_AXE -> {
-                hit(player, 5.0, 4.0);
-                return 12;
+                hit(player, num(Items.Kind.POTATO_AXE, "radius", 5.0), num(Items.Kind.POTATO_AXE, "damage", 4.0));
+                return cooldown(Items.Kind.POTATO_AXE, 12);
             }
             case POTATO_SHOVEL -> {
-                hit(player, 6.0, 4.0);
-                return 20;
+                hit(player, num(Items.Kind.POTATO_SHOVEL, "radius", 6.0), num(Items.Kind.POTATO_SHOVEL, "damage", 4.0));
+                return cooldown(Items.Kind.POTATO_SHOVEL, 20);
             }
             case POTATO_MACE -> {
                 return phoenixCall(player);
             }
             case POTATO_SPEAR -> {
                 lunge(player);
-                return 10;
+                return cooldown(Items.Kind.POTATO_SPEAR, 10);
             }
             case POTATO_BOW -> {
                 firePotatoBolt(player);
-                return 6;
+                return cooldown(Items.Kind.POTATO_BOW, 6);
             }
             case POTATO_SHIELD -> {
-                hit(player, 5.0, 3.0);
-                return 12;
+                hit(player, num(Items.Kind.POTATO_SHIELD, "radius", 5.0), num(Items.Kind.POTATO_SHIELD, "damage", 3.0));
+                return cooldown(Items.Kind.POTATO_SHIELD, 12);
             }
             case POTATO_LANTERN -> {
-                for (LivingEntity e : nearby(player, 16.0)) {
-                    e.setFireTicks(80);
+                for (LivingEntity e : nearby(player, num(Items.Kind.POTATO_LANTERN, "radius", 16.0))) {
+                    e.setFireTicks((int) num(Items.Kind.POTATO_LANTERN, "fire_ticks", 80));
                 }
                 player.getWorld().spawnParticle(Particle.FLAME, player.getLocation().add(0, 1, 0), 60, 4.0, 1.0, 4.0, 0.05);
                 player.getWorld().playSound(player.getLocation(), Sound.ITEM_FIRECHARGE_USE, 1.0f, 1.0f);
-                return 30;
+                return cooldown(Items.Kind.POTATO_LANTERN, 30);
             }
             case POTATO_WAND -> {
-                hit(player, 5.0, 3.0);
-                return 6;
+                hit(player, num(Items.Kind.POTATO_WAND, "radius", 5.0), num(Items.Kind.POTATO_WAND, "damage", 3.0));
+                return cooldown(Items.Kind.POTATO_WAND, 6);
             }
             case POTATO_CHARM -> {
                 player.getWorld().dropItemNaturally(player.getLocation(), plugin.items().create(Items.Kind.POTATO_OF_LIFE));
                 player.getWorld().playSound(player.getLocation(), Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.2f);
-                return 40;
+                return cooldown(Items.Kind.POTATO_CHARM, 40);
             }
             case POTATO_WARD -> {
-                push(player, 6.0, 1.4);
+                push(player, num(Items.Kind.POTATO_WARD, "radius", 6.0), num(Items.Kind.POTATO_WARD, "strength", 1.4));
                 ringBurst(player, 6.0);
-                return 30;
+                return cooldown(Items.Kind.POTATO_WARD, 30);
             }
             case POTATO_HELMET, POTATO_CHESTPLATE, POTATO_LEGGINGS, POTATO_BOOTS -> {
-                hit(player, 5.0, 4.0);
-                return 45;
+                hit(player, num(Items.Kind.POTATO_HELMET, "radius", 5.0), num(Items.Kind.POTATO_HELMET, "damage", 4.0));
+                return cooldown(Items.Kind.POTATO_HELMET, 45);
             }
             case POTATO_SLIME -> {
-                push(player, 4.0, 1.4);
-                return 15;
+                push(player, num(Items.Kind.POTATO_SLIME, "radius", 4.0), num(Items.Kind.POTATO_SLIME, "strength", 1.4));
+                return cooldown(Items.Kind.POTATO_SLIME, 15);
             }
             case POTATO_GHAST -> {
-                push(player, 8.0, 1.6);
-                return 20;
+                push(player, num(Items.Kind.POTATO_GHAST, "radius", 8.0), num(Items.Kind.POTATO_GHAST, "strength", 1.6));
+                return cooldown(Items.Kind.POTATO_GHAST, 20);
             }
             case POTATO_BLAZE -> {
-                for (LivingEntity e : nearby(player, 5.0)) {
-                    e.setFireTicks(100);
-                    e.damage(3.0, player);
+                for (LivingEntity e : nearby(player, num(Items.Kind.POTATO_BLAZE, "radius", 5.0))) {
+                    e.setFireTicks((int) num(Items.Kind.POTATO_BLAZE, "fire_ticks", 100));
+                    e.damage(num(Items.Kind.POTATO_BLAZE, "damage", 3.0), player);
                 }
-                return 20;
+                return cooldown(Items.Kind.POTATO_BLAZE, 20);
             }
             case POTATO_QUARTZ -> {
-                for (LivingEntity e : nearby(player, 12.0)) {
-                    e.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, 160, 0, false, true, true));
+                for (LivingEntity e : nearby(player, num(Items.Kind.POTATO_QUARTZ, "radius", 12.0))) {
+                    e.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, plugin.getConfig().getInt("durations.quartz.glow_ticks", 160), 0, false, true, true));
                 }
-                return 25;
+                return cooldown(Items.Kind.POTATO_QUARTZ, 25);
             }
             case POTATO_ECHO -> {
-                hit(player, 6.0, 2.0);
-                return 15;
+                hit(player, num(Items.Kind.POTATO_ECHO, "radius", 6.0), num(Items.Kind.POTATO_ECHO, "damage", 2.0));
+                return cooldown(Items.Kind.POTATO_ECHO, 15);
             }
             case POTATO_COMPASS -> {
                 int found = 0;
                 for (Entity entity : player.getNearbyEntities(30, 30, 30)) {
                     if (entity instanceof Player other && !other.equals(player)) {
-                        other.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, 200, 0, false, true, true));
+                        other.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, plugin.getConfig().getInt("durations.compass.glow_ticks", 200), 0, false, true, true));
                         found++;
                     }
                 }
                 player.sendMessage(Text.msg("<gray>Lodestone found <white>" + found + "</white> player(s) within 30 blocks."));
                 player.getWorld().playSound(player.getLocation(), Sound.ITEM_LODESTONE_COMPASS_LOCK, 1.0f, 1.0f);
-                return 25;
+                return cooldown(Items.Kind.POTATO_COMPASS, 25);
             }
             case POTATO_FEATHER -> {
-                push(player, 4.0, 1.0);
+                push(player, num(Items.Kind.POTATO_FEATHER, "radius", 4.0), num(Items.Kind.POTATO_FEATHER, "strength", 1.0));
                 player.setVelocity(new Vector(0, 1.2, 0));
                 player.getWorld().spawnParticle(Particle.CLOUD, player.getLocation(), 30, 0.5, 0.2, 0.5, 0.05);
                 player.getWorld().playSound(player.getLocation(), Sound.ENTITY_BREEZE_JUMP, 1.0f, 1.3f);
-                return 15;
+                return cooldown(Items.Kind.POTATO_FEATHER, 15);
             }
             case POTATO_SCROLL -> {
                 int players = 0;
                 int mobs = 0;
                 for (Entity entity : player.getNearbyEntities(40, 40, 40)) {
                     if (entity instanceof Player other && !other.equals(player)) {
-                        other.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, 200, 0, false, true, true));
+                        other.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, plugin.getConfig().getInt("durations.scroll.glow_ticks", 200), 0, false, true, true));
                         players++;
                     } else if (entity instanceof LivingEntity && !(entity instanceof Player)) {
                         mobs++;
@@ -3289,10 +3571,10 @@ final class SecondAbilities implements Listener {
                 player.sendMessage(Text.msg("<gray>Reveal: <white>" + players + "</white> player(s) and <white>"
                         + mobs + "</white> mob(s) within 40 blocks."));
                 player.getWorld().playSound(player.getLocation(), Sound.BLOCK_ENCHANTMENT_TABLE_USE, 1.0f, 1.0f);
-                return 30;
+                return cooldown(Items.Kind.POTATO_SCROLL, 30);
             }
             default -> {
-                return 0;
+                return cooldown(Items.Kind.POTATO_SCROLL, 0);
             }
         }
     }
@@ -3352,7 +3634,7 @@ final class SecondAbilities implements Listener {
     private double phoenixCall(Player player) {
         UUID id = player.getUniqueId();
         breaking.add(id);
-        player.setVelocity(new Vector(0, 1.4, 0));
+        player.setVelocity(new Vector(0, num(Items.Kind.POTATO_MACE, "leap_speed", 1.4), 0));
         player.getWorld().playSound(player.getLocation(), Sound.ENTITY_ENDER_DRAGON_FLAP, 1.0f, 1.2f);
         new BukkitRunnable() {
             private int age = 0;
@@ -3395,8 +3677,10 @@ final class SecondAbilities implements Listener {
     private void phoenixSlam(Player player, double fallHeight) {
         World world = player.getWorld();
         Location impact = player.getLocation();
-        double radius = 4.5;
-        double damage = 4.0 + Math.min(fallHeight * 0.75, 16.0);
+        double radius = num(Items.Kind.POTATO_MACE, "radius", 4.5);
+        double damage = num(Items.Kind.POTATO_MACE, "base_damage", 4.0)
+                + Math.min(fallHeight * num(Items.Kind.POTATO_MACE, "fall_scale", 0.75),
+                        num(Items.Kind.POTATO_MACE, "max_fall_damage", 16.0));
         world.spawnParticle(Particle.FLAME, impact, 80, radius * 0.5, 0.3, radius * 0.5, 0.05);
         world.spawnParticle(Particle.SNOWFLAKE, impact, 80, radius * 0.5, 0.3, radius * 0.5, 0.05);
         world.playSound(impact, Sound.ENTITY_GENERIC_EXPLODE, 1.0f, 0.8f);
@@ -3404,8 +3688,9 @@ final class SecondAbilities implements Listener {
         for (LivingEntity e : nearby(player, radius)) {
             double closeness = 1.0 - e.getLocation().distance(impact) / radius;
             e.damage(damage * (0.5 + 0.5 * closeness), player);
-            e.setFireTicks(80);
-            e.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 40, 1, false, true, true));
+            e.setFireTicks((int) num(Items.Kind.POTATO_MACE, "fire_ticks", 80));
+            e.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS,
+                    (int) num(Items.Kind.POTATO_MACE, "slow_ticks", 40), 1, false, true, true));
             Vector out = e.getLocation().toVector().subtract(impact.toVector()).setY(0);
             if (out.lengthSquared() < 0.0001) {
                 out = new Vector(1, 0, 0);
@@ -3576,7 +3861,7 @@ final class WeaponPassives implements Listener {
             apply(event, attacker, victim, 0.06, 0.25, 2.0);
         } else if (kind == Items.Kind.POTATO_MACE) {
             // Glacial Hold: slows the target for 2 seconds on hit.
-            victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 40, 1, false, true, true));
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, plugin.getConfig().getInt("durations.mace.glacial_hold_ticks", 40), 1, false, true, true));
         }
     }
 
@@ -3731,7 +4016,7 @@ final class PotatoRerollerListener implements Listener {
 
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
-        if (!plugin.activeFor(event.getPlayer())) {
+        if (!plugin.activeFor(event.getPlayer()) || plugin.inSafezone(event.getPlayer())) {
             return;
         }
         if (event.getHand() != EquipmentSlot.HAND) {
@@ -3752,7 +4037,11 @@ final class PotatoRerollerListener implements Listener {
         List<Items.Kind> pool = new ArrayList<>();
         for (Items.Kind kind : Items.Kind.values()) {
             if (kind != Items.Kind.POTATO_REROLLER && kind != Items.Kind.WARRIORS_BLADE
-                    && kind != Items.Kind.POTATO_OVERLORD && kind != Items.Kind.SQ_DISENGAGER) {
+                    && kind != Items.Kind.POTATO_OVERLORD && kind != Items.Kind.SQ_DISENGAGER
+                    && kind != Items.Kind.A_PLANE && kind != Items.Kind.BOMBER_SUMMONER
+                    && kind != Items.Kind.BOMBER_STOPPER && kind != Items.Kind.HIERARCHY_HAMMER
+                    && kind != Items.Kind.EMBER_HAMMER && kind != Items.Kind.FROST_HAMMER
+                    && kind != Items.Kind.TIDE_HAMMER) {
                 pool.add(kind);
             }
         }
@@ -3793,7 +4082,7 @@ final class OverlordListener implements Listener {
 
     @EventHandler
     public void onInteract(PlayerInteractEvent event) {
-        if (!plugin.activeFor(event.getPlayer())) {
+        if (!plugin.activeFor(event.getPlayer()) || plugin.inSafezone(event.getPlayer())) {
             return;
         }
         if (event.getHand() != EquipmentSlot.HAND) {
@@ -3821,7 +4110,7 @@ final class OverlordListener implements Listener {
             player.sendActionBar(Text.itemCooldown(Items.Kind.POTATO_OVERLORD, (ready - now + 999L) / 1000L));
             return;
         }
-        readyAt.put(player.getUniqueId(), now + COOLDOWN_MS);
+        readyAt.put(player.getUniqueId(), now + (long) (plugin.getConfig().getDouble("overlord.cooldown_seconds", 60) * 1000.0));
         storm(player);
     }
 
@@ -3840,15 +4129,15 @@ final class OverlordListener implements Listener {
                     cancel();
                     return;
                 }
-                if (step >= 50) {
+                if (step >= plugin.getConfig().getInt("overlord.storm_steps", 50)) {
                     cancel();
                     shockwave(player, world, centre);
                     return;
                 }
-                if (step % 3 == 0) {
+                if (step % Math.max(1, plugin.getConfig().getInt("overlord.strike_every_steps", 3)) == 0) {
                     for (int i = 0; i < 2; i++) {
                         double angle = random.nextDouble() * 2.0 * Math.PI;
-                        double distance = random.nextDouble() * 20.0;
+                        double distance = random.nextDouble() * plugin.getConfig().getDouble("overlord.range", 20.0);
                         world.strikeLightning(centre.clone().add(
                                 Math.cos(angle) * distance, 0, Math.sin(angle) * distance));
                     }
@@ -3876,13 +4165,18 @@ final class OverlordListener implements Listener {
                 continue;
             }
             // No source: the shockwave is never credited to the user.
-            living.damage(6.0);
-            living.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, 1, false, true, true));
+            if (plugin.trustedBetween(player.getUniqueId(), living)) {
+                continue;
+            }
+            living.damage(plugin.getConfig().getDouble("overlord.shockwave_damage", 6.0));
+            living.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS,
+                    plugin.getConfig().getInt("overlord.slow_ticks", 60), 1, false, true, true));
             Vector out = living.getLocation().toVector().subtract(centre.toVector()).setY(0);
             if (out.lengthSquared() < 0.0001) {
                 out = new Vector(1, 0, 0);
             }
-            living.setVelocity(out.normalize().multiply(1.8).setY(1.4));
+            living.setVelocity(out.normalize().multiply(plugin.getConfig().getDouble("overlord.knockback", 1.8))
+                    .setY(plugin.getConfig().getDouble("overlord.lift", 1.4)));
         }
         world.spawnParticle(Particle.EXPLOSION, centre, 8, 3.0, 1.0, 3.0, 0.0);
         for (int i = 0; i < 64; i++) {
@@ -3891,5 +4185,1184 @@ final class OverlordListener implements Listener {
                     centre.getZ() + Math.sin(angle) * 20.0, 1, 0, 0, 0, 0.0);
         }
         world.playSound(centre, Sound.ENTITY_GENERIC_EXPLODE, 1.6f, 0.5f);
+    }
+}
+
+/**
+ * SQ Disengager, following the jar: right-click to aim (the action bar shows what you're aiming
+ * at), right-click again to dive at the aimed block with gravity off, and smash on arrival. No
+ * damage while the dive is active. Admin only, and it has no cooldown.
+ */
+final class SqDisengagerListener implements Listener {
+
+    private static final class Aim {
+        Location target;
+        boolean launched;
+    }
+
+    private final PotatoSMP plugin;
+    private final Map<UUID, Aim> aims = new HashMap<>();
+    private final Set<UUID> active = new HashSet<>();
+
+    SqDisengagerListener(PotatoSMP plugin) {
+        this.plugin = plugin;
+    }
+
+    @EventHandler
+    public void onRightClick(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) {
+            return;
+        }
+        Action action = event.getAction();
+        if (action != Action.RIGHT_CLICK_AIR && action != Action.RIGHT_CLICK_BLOCK) {
+            return;
+        }
+        if (plugin.items().kindOf(event.getItem()) != Items.Kind.SQ_DISENGAGER) {
+            return;
+        }
+        event.setCancelled(true);
+        event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+        event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+
+        Player player = event.getPlayer();
+        if (!player.hasPermission("potato.admin")) {
+            player.sendMessage(Text.msg("<red>Only admins can use the SQ Disengager."));
+            return;
+        }
+        UUID id = player.getUniqueId();
+        Aim aim = aims.get(id);
+        if (aim != null) {
+            if (aim.target != null && !aim.launched) {
+                launch(player, aim);
+            }
+            return;
+        }
+        aim = new Aim();
+        aims.put(id, aim);
+        active.add(id);
+        aim(player, aim);
+    }
+
+    /** Aims with a ray from the eyes. The action bar shows the state; the target is kept for the dive. */
+    private void aim(Player player, Aim aim) {
+        UUID id = player.getUniqueId();
+        new BukkitRunnable() {
+            private int ticks = 0;
+
+            @Override
+            public void run() {
+                ticks += 2;
+                if (aim.launched || !player.isOnline() || player.isDead() || ticks > 400) {
+                    if (!aim.launched) {
+                        finish(player);
+                    }
+                    cancel();
+                    return;
+                }
+                Location eye = player.getEyeLocation();
+                double range = plugin.getConfig().getDouble("sq.range", 40);
+                double maxHeight = plugin.getConfig().getDouble("sq.max_height", 30);
+                RayTraceResult hit = eye.getWorld().rayTraceBlocks(eye, eye.getDirection(), range,
+                        FluidCollisionMode.NEVER, true);
+                if (hit == null) {
+                    aim.target = null;
+                    player.sendActionBar(Text.parse("<red>NO BLOCK IN RANGE!"));
+                    return;
+                }
+                Location target = hit.getHitPosition().toLocation(eye.getWorld());
+                if (player.getLocation().getY() - target.getY() > maxHeight) {
+                    aim.target = null;
+                    player.sendActionBar(Text.parse("<red>TOO HIGH!"));
+                    return;
+                }
+                aim.target = target;
+                player.sendActionBar(Text.parse("<yellow>AIMING... right-click to dive"));
+                eye.getWorld().spawnParticle(Particle.END_ROD, target, 4, 0.2, 0.2, 0.2, 0.0);
+            }
+        }.runTaskTimer(plugin, 0L, 2L);
+    }
+
+    /** The dive: gravity off, flying straight at the aimed block until it's reached or the time runs out. */
+    private void launch(Player player, Aim aim) {
+        aim.launched = true;
+        player.setGravity(false);
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_BREEZE_JUMP, 1.0f, 0.8f);
+        player.sendActionBar(Text.parse("<green>WOOSH"));
+        Location target = aim.target;
+        double speed = plugin.getConfig().getDouble("sq.speed", 1.8);
+        new BukkitRunnable() {
+            private int age = 0;
+
+            @Override
+            public void run() {
+                age++;
+                if (!player.isOnline() || player.isDead()) {
+                    finish(player);
+                    cancel();
+                    return;
+                }
+                Vector toTarget = target.toVector().subtract(player.getLocation().toVector());
+                if (toTarget.length() < 1.6 || age > 80 || (age > 3 && player.isOnGround())) {
+                    smash(player, target);
+                    finish(player);
+                    cancel();
+                    return;
+                }
+                player.setVelocity(toTarget.normalize().multiply(speed));
+                player.getWorld().spawnParticle(Particle.FLAME, player.getLocation(), 6, 0.2, 0.2, 0.2, 0.02);
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    /** The smash: living things near the impact take damage that falls off, and are knocked back. */
+    private void smash(Player player, Location impact) {
+        World world = impact.getWorld();
+        if (world == null) {
+            return;
+        }
+        double radius = plugin.getConfig().getDouble("sq.radius", 4);
+        double damage = plugin.getConfig().getDouble("sq.damage", 16);
+        world.spawnParticle(Particle.EXPLOSION, impact, 3, 0.5, 0.2, 0.5, 0.0);
+        world.playSound(impact, Sound.ITEM_MACE_SMASH_GROUND_HEAVY, 1.0f, 1.0f);
+        for (Entity entity : world.getNearbyEntities(impact, radius, radius, radius)) {
+            if (!(entity instanceof LivingEntity living) || living.equals(player) || living instanceof ArmorStand) {
+                continue;
+            }
+            double closeness = 1.0 - living.getLocation().distance(impact) / radius;
+            living.damage(damage * (0.5 + 0.5 * closeness), player);
+            Vector out = living.getLocation().toVector().subtract(impact.toVector()).setY(0);
+            if (out.lengthSquared() < 0.0001) {
+                out = new Vector(1, 0, 0);
+            }
+            living.setVelocity(out.normalize().multiply(0.6 + closeness).setY(0.5));
+        }
+    }
+
+    private void finish(Player player) {
+        aims.remove(player.getUniqueId());
+        active.remove(player.getUniqueId());
+        if (player.isOnline()) {
+            player.setGravity(true);
+        }
+    }
+
+    /** No damage of any kind while the SQ Disengager is aiming or diving. */
+    @EventHandler
+    public void onDamage(EntityDamageEvent event) {
+        if (event.getEntity() instanceof Player player && active.contains(player.getUniqueId())) {
+            event.setCancelled(true);
+        }
+    }
+}
+
+/**
+ * Safezones. Operators set one up: /safezonewand, right-click two corners, then /confirm. In
+ * combat, a player can't walk or teleport into a safezone.
+ */
+final class SafezoneManager implements Listener, CommandExecutor {
+
+    record Zone(String world, int x1, int y1, int z1, int x2, int y2, int z2) {
+
+        boolean contains(Location location) {
+            if (location.getWorld() == null || !location.getWorld().getName().equals(world)) {
+                return false;
+            }
+            int x = location.getBlockX();
+            int y = location.getBlockY();
+            int z = location.getBlockZ();
+            return x >= x1 && x <= x2 && y >= y1 && y <= y2 && z >= z1 && z <= z2;
+        }
+
+        String serialize() {
+            return world + "," + x1 + "," + y1 + "," + z1 + "," + x2 + "," + y2 + "," + z2;
+        }
+
+        static Zone parse(String raw) {
+            String[] parts = raw.split(",");
+            if (parts.length != 7) {
+                return null;
+            }
+            try {
+                return new Zone(parts[0], Integer.parseInt(parts[1]), Integer.parseInt(parts[2]),
+                        Integer.parseInt(parts[3]), Integer.parseInt(parts[4]), Integer.parseInt(parts[5]),
+                        Integer.parseInt(parts[6]));
+            } catch (NumberFormatException ex) {
+                return null;
+            }
+        }
+    }
+
+    private final PotatoSMP plugin;
+    private final NamespacedKey wandKey;
+    private final Map<UUID, Location[]> selections = new HashMap<>();
+    private final Map<UUID, org.bukkit.block.data.BlockData[]> originals = new HashMap<>();
+    private final Map<UUID, Long> combatUntil = new HashMap<>();
+    private final List<Zone> zones = new ArrayList<>();
+
+    SafezoneManager(PotatoSMP plugin) {
+        this.plugin = plugin;
+        this.wandKey = new NamespacedKey(plugin, "safezone_wand");
+        for (String raw : plugin.data().safezones()) {
+            Zone zone = Zone.parse(raw);
+            if (zone != null) {
+                zones.add(zone);
+            }
+        }
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (!sender.hasPermission("potato.admin")) {
+            sender.sendMessage(Text.msg("<red>You don't have permission to do that."));
+            return true;
+        }
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(Text.msg("<red>Only players can do that."));
+            return true;
+        }
+        if (command.getName().equalsIgnoreCase("safezonewand")) {
+            giveWand(player);
+        } else {
+            confirm(player);
+        }
+        return true;
+    }
+
+    private void giveWand(Player player) {
+        ItemStack wand = new ItemStack(Material.STICK);
+        ItemMeta meta = wand.getItemMeta();
+        meta.displayName(Text.gradient("Safezone Wand", "#7CFC00", "#00C853"));
+        meta.lore(List.of(Text.parse("<gray>Right-click two blocks to mark the corners."),
+                Text.parse("<gray>Then type /confirm to create the safezone.")));
+        meta.getPersistentDataContainer().set(wandKey, PersistentDataType.BYTE, (byte) 1);
+        wand.setItemMeta(meta);
+        player.getInventory().addItem(wand).values()
+                .forEach(overflow -> player.getWorld().dropItemNaturally(player.getLocation(), overflow));
+        player.sendMessage(Text.msg("<green>Safezone wand given."));
+    }
+
+    private boolean isWand(ItemStack stack) {
+        if (stack == null || stack.getType().isAir() || !stack.hasItemMeta()) {
+            return false;
+        }
+        return stack.getItemMeta().getPersistentDataContainer().has(wandKey, PersistentDataType.BYTE);
+    }
+
+    @EventHandler
+    public void onWandUse(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND || !isWand(event.getItem())) {
+            return;
+        }
+        event.setCancelled(true);
+        Player player = event.getPlayer();
+        if (!player.hasPermission("potato.admin") || event.getAction() != Action.RIGHT_CLICK_BLOCK
+                || event.getClickedBlock() == null) {
+            return;
+        }
+        UUID id = player.getUniqueId();
+        Location corner = event.getClickedBlock().getLocation();
+        Location[] selection = selections.computeIfAbsent(id, key -> new Location[2]);
+        if (selection[0] != null && selection[1] == null && corner.equals(selection[0])) {
+            return;
+        }
+        if (selection[0] == null || selection[1] != null) {
+            restoreCorners(id);
+            selection[0] = corner;
+            selection[1] = null;
+            originals.put(id, new org.bukkit.block.data.BlockData[2]);
+            originals.get(id)[0] = corner.getBlock().getBlockData().clone();
+            corner.getBlock().setType(Material.GLOWSTONE);
+            player.sendMessage(Text.msg("<gray>Corner 1 set. Right-click the opposite corner."));
+        } else {
+            selection[1] = corner;
+            originals.get(id)[1] = corner.getBlock().getBlockData().clone();
+            corner.getBlock().setType(Material.GLOWSTONE);
+            player.sendMessage(Text.msg("<gray>Corner 2 set. Type <white>/confirm</white> to create the safezone."));
+        }
+    }
+
+    /** Puts the two marked corners back to the blocks they were before they turned to glowstone. */
+    private void restoreCorners(UUID id) {
+        Location[] selection = selections.get(id);
+        org.bukkit.block.data.BlockData[] saved = originals.remove(id);
+        if (selection == null || saved == null) {
+            return;
+        }
+        for (int i = 0; i < 2; i++) {
+            if (selection[i] != null && saved[i] != null) {
+                selection[i].getBlock().setBlockData(saved[i], false);
+            }
+        }
+    }
+
+    private void confirm(Player player) {
+        Location[] selection = selections.get(player.getUniqueId());
+        if (selection == null || selection[0] == null || selection[1] == null) {
+            player.sendMessage(Text.msg("<red>Select two corners with /safezonewand first."));
+            return;
+        }
+        if (!selection[0].getWorld().equals(selection[1].getWorld())) {
+            player.sendMessage(Text.msg("<red>The two corners are in different worlds."));
+            return;
+        }
+        Zone zone = new Zone(selection[0].getWorld().getName(),
+                Math.min(selection[0].getBlockX(), selection[1].getBlockX()),
+                Math.min(selection[0].getBlockY(), selection[1].getBlockY()),
+                Math.min(selection[0].getBlockZ(), selection[1].getBlockZ()),
+                Math.max(selection[0].getBlockX(), selection[1].getBlockX()),
+                Math.max(selection[0].getBlockY(), selection[1].getBlockY()),
+                Math.max(selection[0].getBlockZ(), selection[1].getBlockZ()));
+        zones.add(zone);
+        List<String> saved = new ArrayList<>();
+        for (Zone existing : zones) {
+            saved.add(existing.serialize());
+        }
+        plugin.data().setSafezones(saved);
+        restoreCorners(player.getUniqueId());
+        selections.remove(player.getUniqueId());
+        player.sendMessage(Text.msg("<green>Safezone created."));
+    }
+
+    /** True for a non-operator standing in a safezone. Operators are never restricted. */
+    boolean restricted(Player player, Location where) {
+        return !player.hasPermission("potato.admin") && zoneAt(where) != null;
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPlace(BlockPlaceEvent event) {
+        if (restricted(event.getPlayer(), event.getBlock().getLocation())) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage(Text.msg("<red>Hey! You can't place blocks here. Only operators can."));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onBreak(BlockBreakEvent event) {
+        if (restricted(event.getPlayer(), event.getBlock().getLocation())) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage(Text.msg("<red>Hey! You can't break blocks here. Only operators can."));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onItemUse(PlayerInteractEvent event) {
+        if (event.getItem() != null && restricted(event.getPlayer(), event.getPlayer().getLocation())) {
+            event.setCancelled(true);
+            event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+            event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+            event.getPlayer().sendMessage(Text.msg("<red>Hey! You can't use that item here. Only operators can."));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onEat(PlayerItemConsumeEvent event) {
+        if (restricted(event.getPlayer(), event.getPlayer().getLocation())) {
+            event.setCancelled(true);
+            event.getPlayer().sendMessage(Text.msg("<red>Hey! You can't use that item here. Only operators can."));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onAnyDamage(EntityDamageEvent event) {
+        if (event.getEntity() instanceof Player victim && zoneAt(victim.getLocation()) != null) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onAttack(EntityDamageByEntityEvent event) {
+        Player attacker = null;
+        if (event.getDamager() instanceof Player player) {
+            attacker = player;
+        } else if (event.getDamager() instanceof Projectile projectile && projectile.getShooter() instanceof Player shooter) {
+            attacker = shooter;
+        }
+        if (attacker != null && event.getEntity() instanceof Player && zoneAt(attacker.getLocation()) != null) {
+            event.setCancelled(true);
+            attacker.sendMessage(Text.msg("<red>Hey! You can't PvP here."));
+        }
+    }
+
+    @EventHandler
+    public void onCombat(EntityDamageByEntityEvent event) {
+        long until = System.currentTimeMillis() + plugin.getConfig().getLong("safezone.combat_seconds", 30) * 1000L;
+        if (event.getEntity() instanceof Player victim) {
+            combatUntil.put(victim.getUniqueId(), until);
+        }
+        if (event.getDamager() instanceof Player attacker) {
+            combatUntil.put(attacker.getUniqueId(), until);
+        } else if (event.getDamager() instanceof Projectile projectile && projectile.getShooter() instanceof Player shooter) {
+            combatUntil.put(shooter.getUniqueId(), until);
+        }
+    }
+
+    @EventHandler
+    public void onMove(PlayerMoveEvent event) {
+        if (event.getFrom().getBlockX() == event.getTo().getBlockX()
+                && event.getFrom().getBlockY() == event.getTo().getBlockY()
+                && event.getFrom().getBlockZ() == event.getTo().getBlockZ()) {
+            return;
+        }
+        blockEntry(event.getPlayer(), event.getFrom(), event.getTo(), event);
+        if (!event.isCancelled()) {
+            announce(event.getPlayer(), event.getFrom(), event.getTo());
+        }
+    }
+
+    @EventHandler
+    public void onTeleport(PlayerTeleportEvent event) {
+        blockEntry(event.getPlayer(), event.getFrom(), event.getTo(), event);
+    }
+
+    private void blockEntry(Player player, Location from, Location to, Cancellable event) {
+        if (!plugin.isPotatoFeatureEnabled() || !inCombat(player)) {
+            return;
+        }
+        if (zoneAt(to) != null && zoneAt(from) == null) {
+            event.setCancelled(true);
+            player.sendActionBar(Text.parse("<red>You can't enter a safezone while in combat."));
+        }
+    }
+
+    /** Shows a title on screen when the player walks into or out of a safezone. */
+    private void announce(Player player, Location from, Location to) {
+        Zone before = zoneAt(from);
+        Zone after = zoneAt(to);
+        if (before == null && after != null) {
+            player.showTitle(Title.title(Text.parse("<green>Safezone"),
+                    Text.parse("<gray>No damage, no building, no items here")));
+        } else if (before != null && after == null) {
+            player.showTitle(Title.title(Text.parse("<gray>Left the safezone"), Text.parse("")));
+        }
+    }
+
+    private boolean inCombat(Player player) {
+        Long until = combatUntil.get(player.getUniqueId());
+        return until != null && System.currentTimeMillis() < until;
+    }
+
+    private Zone zoneAt(Location location) {
+        for (Zone zone : zones) {
+            if (zone.contains(location)) {
+                return zone;
+            }
+        }
+        return null;
+    }
+}
+
+/**
+ * A Plane (operators only): a boat you fly by looking where you want to go. Q while flying drops a
+ * TNT minecart; each drop uses one Firework Star. The minecarts explode on landing and never break
+ * blocks, and the pilot takes no damage from them.
+ */
+final class PlaneManager implements Listener {
+
+    private final PotatoSMP plugin;
+    private final NamespacedKey planeKey;
+    private final NamespacedKey throwerKey;
+    private final NamespacedKey cartKey;
+    private final Map<UUID, Boat> planes = new HashMap<>();
+
+    PlaneManager(PotatoSMP plugin) {
+        this.plugin = plugin;
+        this.planeKey = new NamespacedKey(plugin, "a_plane");
+        this.throwerKey = new NamespacedKey(plugin, "tuff_thrower");
+        this.cartKey = new NamespacedKey(plugin, "tuff_cart");
+    }
+
+    @EventHandler
+    public void onRightClick(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) {
+            return;
+        }
+        Action action = event.getAction();
+        if (action != Action.RIGHT_CLICK_AIR && action != Action.RIGHT_CLICK_BLOCK) {
+            return;
+        }
+        if (plugin.items().kindOf(event.getItem()) != Items.Kind.A_PLANE) {
+            return;
+        }
+        event.setCancelled(true);
+        event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+        event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+        Player pilot = event.getPlayer();
+        if (!pilot.hasPermission("potato.admin")) {
+            pilot.sendMessage(Text.msg("<red>Only operators can fly the A Plane."));
+            return;
+        }
+        if (planes.containsKey(pilot.getUniqueId())) {
+            pilot.sendMessage(Text.msg("<red>You're already flying a plane."));
+            return;
+        }
+        Location spawn = pilot.getEyeLocation().add(pilot.getLocation().getDirection().multiply(2.0));
+        Boat plane = pilot.getWorld().spawn(spawn, Boat.class);
+        plane.setGravity(false);
+        plane.setPersistent(false);
+        plane.getPersistentDataContainer().set(planeKey, PersistentDataType.BYTE, (byte) 1);
+        plane.addPassenger(pilot);
+        planes.put(pilot.getUniqueId(), plane);
+        pilot.getWorld().playSound(spawn, Sound.ENTITY_ENDER_DRAGON_FLAP, 1.0f, 1.2f);
+        fly(pilot, plane);
+    }
+
+    /** Each tick, the plane moves where the pilot looks. */
+    private void fly(Player pilot, Boat plane) {
+        double speed = plugin.getConfig().getDouble("plane.speed", 0.9);
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!pilot.isOnline() || !plane.isValid() || !plane.getPassengers().contains(pilot)) {
+                    land(pilot.getUniqueId(), plane);
+                    cancel();
+                    return;
+                }
+                plane.setVelocity(pilot.getLocation().getDirection().multiply(speed));
+                pilot.getWorld().spawnParticle(Particle.CLOUD, plane.getLocation(), 2, 0.2, 0.1, 0.2, 0.01);
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    private void land(UUID pilotId, Boat plane) {
+        planes.remove(pilotId);
+        if (plane.isValid()) {
+            plane.remove();
+        }
+    }
+
+    @EventHandler
+    public void onExit(VehicleExitEvent event) {
+        if (event.getVehicle() instanceof Boat plane && plane.getPersistentDataContainer().has(planeKey, PersistentDataType.BYTE)
+                && event.getExited() instanceof Player pilot) {
+            land(pilot.getUniqueId(), plane);
+        }
+    }
+
+    /** Q while flying: drop a TNT minecart, which uses up one Firework Star. */
+    @EventHandler
+    public void onDrop(PlayerDropItemEvent event) {
+        Player pilot = event.getPlayer();
+        Boat plane = planes.get(pilot.getUniqueId());
+        if (plane == null || pilot.getVehicle() != plane) {
+            return;
+        }
+        event.setCancelled(true);
+        if (!pilot.hasPermission("potato.admin")) {
+            return;
+        }
+        if (!takeStar(pilot)) {
+            pilot.sendMessage(Text.msg("<red>You need a Firework Star to drop a bomb."));
+            return;
+        }
+        dropBomb(pilot, plane.getLocation());
+    }
+
+    private boolean takeStar(Player pilot) {
+        for (int slot = 0; slot < pilot.getInventory().getSize(); slot++) {
+            ItemStack stack = pilot.getInventory().getItem(slot);
+            if (stack != null && stack.getType() == Material.FIREWORK_STAR && plugin.items().kindOf(stack) == null) {
+                if (stack.getAmount() <= 1) {
+                    pilot.getInventory().setItem(slot, null);
+                } else {
+                    stack.setAmount(stack.getAmount() - 1);
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The minecart falls, explodes on landing with no block damage, and never hurts its pilot. */
+    private void dropBomb(Player pilot, Location from) {
+        ExplosiveMinecart cart = from.getWorld().spawn(from.clone().subtract(0, 1, 0), ExplosiveMinecart.class);
+        cart.getPersistentDataContainer().set(throwerKey, PersistentDataType.STRING, pilot.getUniqueId().toString());
+        cart.getPersistentDataContainer().set(cartKey, PersistentDataType.BYTE, (byte) 1);
+        float power = (float) plugin.getConfig().getDouble("plane.bomb_power", 3.0);
+        new BukkitRunnable() {
+            private int age = 0;
+
+            @Override
+            public void run() {
+                age++;
+                if (!cart.isValid()) {
+                    cancel();
+                    return;
+                }
+                if (age > 200) {
+                    cart.remove();
+                    cancel();
+                    return;
+                }
+                if (age >= 2 && cart.isOnGround()) {
+                    Location where = cart.getLocation();
+                    where.getWorld().createExplosion(cart, where, power, false, false);
+                    cart.remove();
+                    cancel();
+                }
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+    }
+}
+
+/**
+ * Bomber (operators only): the Bomber Summoner makes a formation of three phantoms that flies in the
+ * direction you were looking and drops TNT minecarts. The Bomber Stopper removes it. The phantoms never
+ * target anyone, and the minecarts never hurt the one who summoned them.
+ */
+final class BomberManager implements Listener {
+
+    private final PotatoSMP plugin;
+    private final NamespacedKey bomberKey;
+    private final NamespacedKey throwerKey;
+    private final NamespacedKey cartKey;
+    private final Map<UUID, List<Mob>> bombers = new HashMap<>();
+    private final Map<UUID, BukkitTask> tasks = new HashMap<>();
+
+    BomberManager(PotatoSMP plugin) {
+        this.plugin = plugin;
+        this.bomberKey = new NamespacedKey(plugin, "bomber_owner");
+        this.throwerKey = new NamespacedKey(plugin, "tuff_thrower");
+        this.cartKey = new NamespacedKey(plugin, "tuff_cart");
+    }
+
+    @EventHandler
+    public void onRightClick(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) {
+            return;
+        }
+        Action action = event.getAction();
+        if (action != Action.RIGHT_CLICK_AIR && action != Action.RIGHT_CLICK_BLOCK) {
+            return;
+        }
+        Items.Kind kind = plugin.items().kindOf(event.getItem());
+        if (kind != Items.Kind.BOMBER_SUMMONER && kind != Items.Kind.BOMBER_STOPPER) {
+            return;
+        }
+        event.setCancelled(true);
+        event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
+        event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
+        Player player = event.getPlayer();
+        if (!player.hasPermission("potato.admin")) {
+            player.sendMessage(Text.msg("<red>Only operators can use the bomber."));
+            return;
+        }
+        if (kind == Items.Kind.BOMBER_STOPPER) {
+            stop(player);
+        } else {
+            summon(player);
+        }
+    }
+
+    private void summon(Player player) {
+        UUID owner = player.getUniqueId();
+        if (bombers.containsKey(owner)) {
+            player.sendMessage(Text.msg("<red>Your bomber is already flying. Use the Bomber Stopper first."));
+            return;
+        }
+        Vector forward = player.getLocation().getDirection().setY(0);
+        if (forward.lengthSquared() < 0.0001) {
+            forward = new Vector(1, 0, 0);
+        }
+        forward.normalize();
+        Vector right = forward.clone().crossProduct(new Vector(0, 1, 0)).normalize();
+        Location core = player.getEyeLocation().add(forward.clone().multiply(5.0)).add(0, 3, 0);
+
+        List<Mob> parts = new ArrayList<>();
+        Location[] spots = {core, core.clone().add(right.clone().multiply(2.5)),
+                core.clone().add(right.clone().multiply(-2.5)).add(forward.clone().multiply(-1.0))};
+        for (Location spot : spots) {
+            Phantom phantom = spot.getWorld().spawn(spot, Phantom.class);
+            phantom.setAI(false);
+            phantom.setGravity(false);
+            phantom.setSilent(true);
+            phantom.setPersistent(false);
+            phantom.setInvulnerable(true);
+            phantom.getPersistentDataContainer().set(bomberKey, PersistentDataType.STRING, owner.toString());
+            parts.add(phantom);
+        }
+        bombers.put(owner, parts);
+        player.sendMessage(Text.msg("<green>Bomber summoned. Use the Bomber Stopper to stop it."));
+        fly(player, parts, forward);
+    }
+
+    /** Keeps the formation moving in one direction, and drops a minecart every few ticks. */
+    private void fly(Player player, List<Mob> parts, Vector forward) {
+        UUID owner = player.getUniqueId();
+        double speed = plugin.getConfig().getDouble("bomber.speed", 0.7);
+        int interval = Math.max(5, plugin.getConfig().getInt("bomber.drop_interval_ticks", 40));
+        BukkitTask task = new BukkitRunnable() {
+            private int tick = 0;
+
+            @Override
+            public void run() {
+                tick++;
+                boolean alive = !parts.isEmpty();
+                for (Mob part : parts) {
+                    if (!part.isValid()) {
+                        alive = false;
+                    }
+                }
+                if (!alive) {
+                    cleanup(owner);
+                    cancel();
+                    return;
+                }
+                for (Mob part : parts) {
+                    part.setVelocity(forward.clone().multiply(speed));
+                }
+                if (tick % interval == 0) {
+                    dropBomb(owner, parts.get(0).getLocation());
+                }
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+        tasks.put(owner, task);
+    }
+
+    private void stop(Player player) {
+        UUID owner = player.getUniqueId();
+        if (!bombers.containsKey(owner)) {
+            player.sendMessage(Text.msg("<red>You have no bomber flying."));
+            return;
+        }
+        cleanup(owner);
+        player.sendMessage(Text.msg("<green>Bomber stopped."));
+    }
+
+    private void cleanup(UUID owner) {
+        List<Mob> parts = bombers.remove(owner);
+        if (parts != null) {
+            for (Mob part : parts) {
+                if (part.isValid()) {
+                    part.remove();
+                }
+            }
+        }
+        BukkitTask task = tasks.remove(owner);
+        if (task != null) {
+            task.cancel();
+        }
+    }
+
+    /** A minecart falls from the core, explodes on landing, and never breaks blocks or hurts its owner. */
+    private void dropBomb(UUID owner, Location from) {
+        float power = (float) plugin.getConfig().getDouble("bomber.bomb_power", 3.0);
+        ExplosiveMinecart cart = from.getWorld().spawn(from.clone().subtract(0, 1, 0), ExplosiveMinecart.class);
+        cart.getPersistentDataContainer().set(throwerKey, PersistentDataType.STRING, owner.toString());
+        cart.getPersistentDataContainer().set(cartKey, PersistentDataType.BYTE, (byte) 1);
+        new BukkitRunnable() {
+            private int age = 0;
+
+            @Override
+            public void run() {
+                age++;
+                if (!cart.isValid()) {
+                    cancel();
+                    return;
+                }
+                if (age > 200) {
+                    cart.remove();
+                    cancel();
+                    return;
+                }
+                if (age >= 2 && cart.isOnGround()) {
+                    Location where = cart.getLocation();
+                    where.getWorld().createExplosion(cart, where, power, false, false);
+                    cart.remove();
+                    cancel();
+                }
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    /** The phantoms never pick a target, so they never go after anyone. */
+    @EventHandler
+    public void onTarget(EntityTargetEvent event) {
+        if (event.getEntity().getPersistentDataContainer().has(bomberKey, PersistentDataType.STRING)) {
+            event.setCancelled(true);
+        }
+    }
+}
+
+/**
+ * Hierarchy Hammer and friends. The altar crafts it from items in your inventory. The hammer slams,
+ * aim-locks, heals on hit, and can put you above an attacker for a Hierarchy move.
+ */
+final class HierarchyManager implements Listener {
+
+    private static final Items.Kind[] HAMMERS = {Items.Kind.HIERARCHY_HAMMER, Items.Kind.EMBER_HAMMER,
+            Items.Kind.FROST_HAMMER, Items.Kind.TIDE_HAMMER};
+    private static final String[] RECIPE_NAMES = {"Nether Star", "Player Head", "Diamond Block",
+            "Netherite Ingot", "Gold Ingot"};
+    private static final Material[] RECIPE_MATERIALS = {Material.NETHER_STAR, Material.PLAYER_HEAD,
+            Material.DIAMOND_BLOCK, Material.NETHERITE_INGOT, Material.GOLD_INGOT};
+    private static final int[] RECIPE_AMOUNTS = {10, 10, 64, 32, 300};
+
+    private final PotatoSMP plugin;
+    private final Map<UUID, UUID> pendingHierarchy = new HashMap<>();
+
+    HierarchyManager(PotatoSMP plugin) {
+        this.plugin = plugin;
+    }
+
+    private static boolean isHammer(Items.Kind kind) {
+        for (Items.Kind hammer : HAMMERS) {
+            if (hammer == kind) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Creates the altar block at the given location and draws the recipe above it. */
+    void summonAltar(Location at) {
+        Location block = at.getBlock().getLocation();
+        block.getBlock().setType(Material.LODESTONE);
+        plugin.data().setAltar(block.getWorld().getName() + "," + block.getBlockX() + ","
+                + block.getBlockY() + "," + block.getBlockZ());
+        Location text = block.clone().add(0.5, 2.5, 0.5);
+        block.getWorld().spawn(text, TextDisplay.class, display -> {
+            display.text(Text.parse(recipeLines()));
+            display.setPersistent(true);
+        });
+    }
+
+    private String recipeLines() {
+        StringBuilder lines = new StringBuilder("<gradient:#FFD54F:#FF6F00><bold>HIERARCHY HAMMER</bold></gradient>");
+        for (int i = 0; i < RECIPE_NAMES.length; i++) {
+            lines.append("\n<gray>").append(RECIPE_AMOUNTS[i]).append("x <white>").append(RECIPE_NAMES[i]);
+        }
+        lines.append("\n<yellow>Right-click the altar with the items.");
+        return lines.toString();
+    }
+
+    private boolean isAltar(Location location) {
+        String raw = plugin.data().altar();
+        if (raw == null || location.getWorld() == null) {
+            return false;
+        }
+        String[] parts = raw.split(",");
+        return parts.length == 4 && parts[0].equals(location.getWorld().getName())
+                && Integer.parseInt(parts[1]) == location.getBlockX()
+                && Integer.parseInt(parts[2]) == location.getBlockY()
+                && Integer.parseInt(parts[3]) == location.getBlockZ();
+    }
+
+    @EventHandler
+    public void onAltarUse(PlayerInteractEvent event) {
+        if (event.getAction() != Action.RIGHT_CLICK_BLOCK || event.getClickedBlock() == null) {
+            return;
+        }
+        if (!isAltar(event.getClickedBlock().getLocation())) {
+            return;
+        }
+        event.setCancelled(true);
+        Player player = event.getPlayer();
+        List<String> missing = new ArrayList<>();
+        for (int i = 0; i < RECIPE_MATERIALS.length; i++) {
+            if (count(player, RECIPE_MATERIALS[i]) < RECIPE_AMOUNTS[i]) {
+                missing.add((RECIPE_AMOUNTS[i] - count(player, RECIPE_MATERIALS[i])) + "x " + RECIPE_NAMES[i]);
+            }
+        }
+        if (!missing.isEmpty()) {
+            player.sendMessage(Text.msg("<red>You don't have enough items. You still need: " + String.join(", ", missing)));
+            return;
+        }
+        for (int i = 0; i < RECIPE_MATERIALS.length; i++) {
+            take(player, RECIPE_MATERIALS[i], RECIPE_AMOUNTS[i]);
+        }
+        ItemStack hammer = plugin.items().create(Items.Kind.HIERARCHY_HAMMER);
+        player.getInventory().addItem(hammer).values()
+                .forEach(overflow -> player.getWorld().dropItemNaturally(player.getLocation(), overflow));
+        plugin.broadcast("<gold>Hierarchy Hammer has been crafted!");
+    }
+
+    private static int count(Player player, Material material) {
+        int total = 0;
+        for (ItemStack stack : player.getInventory().getContents()) {
+            if (stack != null && stack.getType() == material && stack.getAmount() > 0) {
+                total += stack.getAmount();
+            }
+        }
+        return total;
+    }
+
+    private static void take(Player player, Material material, int amount) {
+        int left = amount;
+        ItemStack[] contents = player.getInventory().getContents();
+        for (int slot = 0; slot < contents.length && left > 0; slot++) {
+            ItemStack stack = contents[slot];
+            if (stack == null || stack.getType() != material) {
+                continue;
+            }
+            int taken = Math.min(left, stack.getAmount());
+            stack.setAmount(stack.getAmount() - taken);
+            left -= taken;
+        }
+        player.getInventory().setContents(contents);
+    }
+
+    /** Announces the hammer's destruction when its item burns, despawns, or falls out of the world. */
+    @EventHandler
+    public void onDespawn(ItemDespawnEvent event) {
+        if (isHammer(plugin.items().kindOf(event.getEntity().getItemStack()))) {
+            plugin.broadcast("<dark_red>Hierarchy Hammer has been destroyed!");
+        }
+    }
+
+    @EventHandler
+    public void onItemDamage(EntityDamageEvent event) {
+        if (!(event.getEntity() instanceof Item item) || event.isCancelled()) {
+            return;
+        }
+        if (!isHammer(plugin.items().kindOf(item.getItemStack()))) {
+            return;
+        }
+        plugin.getServer().getScheduler().runTaskLater(plugin, () -> {
+            if (!item.isValid()) {
+                plugin.broadcast("<dark_red>Hierarchy Hammer has been destroyed!");
+            }
+        }, 2L);
+    }
+
+    /** Right-click slams. Sneak + right-click aim-locks the nearest player in front of you. */
+    @EventHandler
+    public void onHammerUse(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) {
+            return;
+        }
+        Action action = event.getAction();
+        if (action != Action.RIGHT_CLICK_AIR && action != Action.RIGHT_CLICK_BLOCK) {
+            return;
+        }
+        Items.Kind kind = plugin.items().kindOf(event.getItem());
+        if (kind != Items.Kind.HIERARCHY_HAMMER) {
+            return;
+        }
+        event.setCancelled(true);
+        Player player = event.getPlayer();
+        if (player.isSneaking()) {
+            Player target = aimedPlayer(player);
+            if (target == null) {
+                player.sendMessage(Text.msg("<red>No player in front of you to aim-lock."));
+                return;
+            }
+            leapAt(player, target, plugin.getConfig().getDouble("hammer.aimlock_multiplier", 1.5));
+        } else {
+            leapAt(player, null, 1.0);
+        }
+    }
+
+    private Player aimedPlayer(Player player) {
+        Player best = null;
+        double bestAngle = Math.cos(Math.toRadians(plugin.getConfig().getDouble("hammer.aim_angle", 30)));
+        Vector look = player.getEyeLocation().getDirection().normalize();
+        for (Player other : player.getWorld().getPlayers()) {
+            if (other.equals(player) || other.getLocation().distance(player.getLocation())
+                    > plugin.getConfig().getDouble("hammer.aim_range", 14)) {
+                continue;
+            }
+            Vector toward = other.getEyeLocation().toVector().subtract(player.getEyeLocation().toVector()).normalize();
+            double dot = toward.dot(look);
+            if (dot > bestAngle) {
+                bestAngle = dot;
+                best = other;
+            }
+        }
+        return best;
+    }
+
+    /** A leap, then a shockwave on landing. Lightning, 20% per enemy hit, only happens on a slam. */
+    private void leapAt(Player player, Player target, double damageScale) {
+        player.setVelocity(new Vector(0, 1.2, 0));
+        player.getWorld().playSound(player.getLocation(), Sound.ENTITY_BREEZE_JUMP, 1.0f, 0.6f);
+        new BukkitRunnable() {
+            private int age = 0;
+            private boolean descending = false;
+
+            @Override
+            public void run() {
+                age++;
+                if (!player.isOnline() || player.isDead() || age > 120) {
+                    cancel();
+                    return;
+                }
+                if (!descending) {
+                    if (player.getVelocity().getY() <= 0 || age >= 30) {
+                        descending = true;
+                        Vector drop = new Vector(0, -2.5, 0);
+                        if (target != null && target.isOnline()) {
+                            Vector toward = target.getLocation().toVector().subtract(player.getLocation().toVector()).setY(0);
+                            if (toward.lengthSquared() > 0.01) {
+                                drop.add(toward.normalize().multiply(0.4));
+                            }
+                        }
+                        player.setVelocity(drop);
+                    }
+                    return;
+                }
+                if (age > 5 && player.isOnGround()) {
+                    shockwave(player, damageScale);
+                    cancel();
+                }
+            }
+        }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    private void shockwave(Player player, double damageScale) {
+        World world = player.getWorld();
+        Location impact = player.getLocation();
+        double radius = plugin.getConfig().getDouble("hammer.shockwave_radius", 4.0);
+        world.spawnParticle(Particle.EXPLOSION, impact, 2, 0.4, 0.2, 0.4, 0.0);
+        world.spawnParticle(Particle.CRIT, impact, 60, radius * 0.5, 0.3, radius * 0.5, 0.2);
+        world.playSound(impact, Sound.ENTITY_GENERIC_EXPLODE, 1.0f, 1.0f);
+        for (LivingEntity living : world.getNearbyLivingEntities(impact, radius)) {
+            if (living.equals(player) || living.isDead() || living instanceof ArmorStand) {
+                continue;
+            }
+            living.damage(plugin.getConfig().getDouble("hammer.shockwave_damage", 6.0) * damageScale, player);
+            if (ThreadLocalRandom.current().nextDouble() < plugin.getConfig().getDouble("hammer.lightning_chance", 0.20)) {
+                world.strikeLightning(living.getLocation());
+            }
+        }
+    }
+
+    /** Hits by the hammer: LifeSteal, element effects, and the Hierarchy move. */
+    @EventHandler
+    public void onHit(EntityDamageByEntityEvent event) {
+        if (!(event.getDamager() instanceof Player attacker)) {
+            return;
+        }
+        if (!(event.getEntity() instanceof LivingEntity victim) || victim.equals(attacker)) {
+            return;
+        }
+        Items.Kind kind = plugin.items().kindOf(attacker.getInventory().getItemInMainHand());
+        if (!isHammer(kind) || isTrusted(attacker, victim)) {
+            return;
+        }
+        if (kind == Items.Kind.HIERARCHY_HAMMER) {
+            attacker.addPotionEffect(new PotionEffect(PotionEffectType.REGENERATION,
+                    plugin.getConfig().getInt("hammer.lifesteal_ticks", 40), 0, false, true, true));
+            UUID punished = pendingHierarchy.remove(attacker.getUniqueId());
+            if (punished != null && punished.equals(victim.getUniqueId())) {
+                hierarchyMove(attacker, victim);
+            }
+        } else if (kind == Items.Kind.EMBER_HAMMER) {
+            victim.setFireTicks(80);
+        } else if (kind == Items.Kind.FROST_HAMMER) {
+            victim.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, plugin.getConfig().getInt("durations.frost_hammer.slow_ticks", 40), 1, false, true, true));
+        } else if (kind == Items.Kind.TIDE_HAMMER) {
+            Vector out = victim.getLocation().toVector().subtract(attacker.getLocation().toVector()).setY(0);
+            if (out.lengthSquared() > 0.0001) {
+                victim.setVelocity(out.normalize().multiply(1.1).setY(0.4));
+            }
+        }
+        if (kind == Items.Kind.HIERARCHY_HAMMER && victim instanceof Player target
+                && target.getInventory().getItemInMainHand() != null
+                && plugin.items().kindOf(target.getInventory().getItemInMainHand()) == Items.Kind.HIERARCHY_HAMMER
+                && ThreadLocalRandom.current().nextDouble() < plugin.getConfig().getDouble("hammer.hierarchy_chance", 0.05)) {
+            // Being hit while holding a hammer: a 5% chance to be placed above the attacker.
+            target.teleport(attacker.getLocation().add(0, plugin.getConfig().getDouble("hammer.hierarchy_height", 4.0), 0));
+            pendingHierarchy.put(target.getUniqueId(), attacker.getUniqueId());
+            target.sendMessage(Text.msg("<gold>Hierarchy! You're above them. Hit them to punish them."));
+        }
+    }
+
+    /** One golden arrow per kill the target has made. Each arrow does two hearts when it lands. */
+    private void hierarchyMove(Player hitter, LivingEntity target) {
+        int kills = plugin.data().kills(target.getUniqueId());
+        if (target instanceof Player) {
+            kills = plugin.data().kills(target.getUniqueId());
+        }
+        for (int i = 0; i < Math.min(kills, plugin.getConfig().getInt("hammer.max_arrows", 30)); i++) {
+            Location above = target.getLocation().add(ThreadLocalRandom.current().nextDouble(-1.5, 1.5), 14 + i * 0.5,
+                    ThreadLocalRandom.current().nextDouble(-1.5, 1.5));
+            ItemDisplay arrow = above.getWorld().spawn(above, ItemDisplay.class, display -> {
+                display.setItemStack(new ItemStack(Material.GOLDEN_SWORD));
+                display.setPersistent(false);
+            });
+            new BukkitRunnable() {
+                private int age = 0;
+
+                @Override
+                public void run() {
+                    age++;
+                    if (!arrow.isValid()) {
+                        cancel();
+                        return;
+                    }
+                    arrow.teleport(arrow.getLocation().add(0, -0.9, 0));
+                    if (arrow.getLocation().getY() <= target.getLocation().getY() + 1.0 || age > 80) {
+                        if (target.isValid() && !target.isDead()) {
+                            target.damage(plugin.getConfig().getDouble("hammer.kill_damage", 4.0), hitter);
+                        }
+                        arrow.remove();
+                        cancel();
+                    }
+                }
+            }.runTaskTimer(plugin, 1L, 1L);
+        }
+        hitter.getWorld().playSound(hitter.getLocation(), Sound.ITEM_TRIDENT_THUNDER, 1.0f, 0.6f);
+    }
+
+    private boolean isTrusted(Player attacker, LivingEntity victim) {
+        if (!(victim instanceof Player other)) {
+            return false;
+        }
+        return plugin.data().trusted(attacker.getUniqueId()).contains(other.getUniqueId().toString())
+                || plugin.data().trusted(other.getUniqueId()).contains(attacker.getUniqueId().toString());
+    }
+}
+
+/** /hierarchyhammer summon altar, /leaderboard kills, and /potatosmp trust. */
+final class HierarchyCommand implements CommandExecutor {
+
+    private final PotatoSMP plugin;
+
+    HierarchyCommand(PotatoSMP plugin) {
+        this.plugin = plugin;
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (command.getName().equalsIgnoreCase("leaderboard")) {
+            leaderboard(sender, args);
+            return true;
+        }
+        if (!sender.hasPermission("potato.admin")) {
+            sender.sendMessage(Text.msg("<red>You don't have permission to do that."));
+            return true;
+        }
+        if (!(sender instanceof Player player) || args.length < 2 || !args[0].equalsIgnoreCase("summon")
+                || !args[1].equalsIgnoreCase("altar")) {
+            sender.sendMessage(Text.msg("<red>Usage: /hierarchyhammer summon altar"));
+            return true;
+        }
+        plugin.hierarchy().summonAltar(player.getLocation().add(player.getLocation().getDirection().setY(0)
+                .normalize().multiply(2.0)));
+        player.sendMessage(Text.msg("<green>Altar summoned. Right-click it with the items to craft the hammer."));
+        return true;
+    }
+
+    private void leaderboard(CommandSender sender, String[] args) {
+        if (args.length < 1 || !args[0].equalsIgnoreCase("kills")) {
+            sender.sendMessage(Text.msg("<red>Usage: /leaderboard kills"));
+            return;
+        }
+        List<Map.Entry<UUID, Integer>> entries = new ArrayList<>(plugin.data().allKills().entrySet());
+        entries.sort((a, b) -> Integer.compare(b.getValue(), a.getValue()));
+        sender.sendMessage(Text.gradient("Kill leaderboard"));
+        int rank = 1;
+        for (Map.Entry<UUID, Integer> entry : entries) {
+            if (rank > 10) {
+                break;
+            }
+            String name = Bukkit.getOfflinePlayer(entry.getKey()).getName();
+            sender.sendMessage(Text.parse("<gray>" + rank + ". <white>" + Text.esc(name == null ? "unknown" : name)
+                    + " <gray>- " + entry.getValue() + " kills"));
+            rank++;
+        }
+        if (entries.isEmpty()) {
+            sender.sendMessage(Text.parse("<gray>No kills recorded yet."));
+        }
     }
 }
