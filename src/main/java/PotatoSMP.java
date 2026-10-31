@@ -66,6 +66,7 @@ import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.ItemDespawnEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCreativeEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
@@ -74,6 +75,7 @@ import org.bukkit.event.inventory.InventoryType;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.inventory.PrepareSmithingEvent;
+import org.bukkit.event.player.PlayerEditBookEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerItemConsumeEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
@@ -204,9 +206,22 @@ public final class PotatoSMP extends JavaPlugin {
         if (wandCommand != null) {
             wandCommand.setExecutor(safezones);
         }
+        PluginCommand zoneCommand = getCommand("safezone");
+        if (zoneCommand != null) {
+            zoneCommand.setExecutor(safezones);
+        }
         PluginCommand confirmCommand = getCommand("confirm");
         if (confirmCommand != null) {
             confirmCommand.setExecutor(safezones);
+        }
+        DeathNoteManager deathNote = new DeathNoteManager(this);
+        getServer().getPluginManager().registerEvents(deathNote, this);
+        FillWandManager fillWand = new FillWandManager(this);
+        getServer().getPluginManager().registerEvents(fillWand, this);
+        PluginCommand fillCmd = getCommand("fillwand");
+        if (fillCmd != null) {
+            fillCmd.setExecutor(fillWand);
+            fillCmd.setTabCompleter(fillWand);
         }
         getServer().getPluginManager().registerEvents(reroller, this);
         getServer().getPluginManager().registerEvents(overlord, this);
@@ -1544,6 +1559,8 @@ final class Items {
         BOMBER_STOPPER(Material.STONE_BUTTON, "Bomber Stopper",
                 "Operators only. Right-click to stop your bomber.",
                 "The bomber is removed."),
+        DEATH_NOTE(Material.WRITABLE_BOOK, "Death Note", "Write a player's name, then press Done. They die.",
+                "Killed by DEATH NOTE. Every name is a death sentence."),
         HIERARCHY_HAMMER(Material.MACE, "Hierarchy Hammer",
                 "Right-click to slam. Sneak + right-click to aim-lock the nearest player.",
                 "Hits heal you. Being hit can put you above your attacker."),
@@ -1565,7 +1582,7 @@ final class Items {
         POTATO_CHESTPLATE(Material.NETHERITE_CHESTPLATE, "Potato Chestplate", "Netherite armor made by smithing a diamond chestplate.", "Passive: Resistance I while worn."),
         POTATO_LEGGINGS(Material.NETHERITE_LEGGINGS, "Potato Leggings", "Netherite armor made by smithing diamond leggings.", "Passive: Resistance I while worn."),
         POTATO_BOOTS(Material.NETHERITE_BOOTS, "Potato Boots", "Netherite armor made by smithing diamond boots.", "Passive: Resistance I while worn."),
-        TUFF_SNOWBALL(Material.SNOWBALL, "Tuff Snowball", "Throw it: a rain of TNT minecarts, anvils, and pointed dripstone falls.", "TNT minecarts explode but never break blocks.", "It can't hurt the one who threw it."),
+        TUFF_SNOWBALL(Material.SNOWBALL, "Tuff Snowball", "Throw it: a rain of TNT minecarts and pointed dripstone falls.", "TNT minecarts explode but never break blocks.", "It can't hurt the one who threw it."),
         POTATO_A5_STRIKE(Material.BREEZE_ROD, "Potato A5 Strike", "Right-click: launch straight up, then slam straight down where you stand.", "Refused if blocks are above the target or you.", "Passive: Jump Boost I while held in either hand."),
         ENCHANTED_POTATO_A5_STRIKE(Material.BREEZE_ROD, "Enchanted Potato A5 Strike", "A stronger A5 Strike with a shorter cooldown.", "Passive: Jump Boost II while held in either hand."),
         POTATO_BOW(Material.BOW, "Potato Bow", "Arrows from this bow deal bonus damage.", "Passive: Speed I while held in either hand."),
@@ -1633,6 +1650,7 @@ final class Items {
                 case POTATO_CHARM -> "Sneak + right-click: Fortune Drop, dropping a Potato of Life at your feet. 40 s cooldown.";
                 case POTATO_WARD -> "Sneak + right-click: Ward Ring, pushing enemies out within 6 blocks. 30 s cooldown.";
                 case POTATO_SLIME, POTATO_GHAST, POTATO_BLAZE, POTATO_QUARTZ, POTATO_ECHO -> "";
+                case DEATH_NOTE -> "Right-click to write a player's name, then press Done. They die.";
                 case SQ_DISENGAGER, A_PLANE, BOMBER_SUMMONER, BOMBER_STOPPER, HIERARCHY_HAMMER, EMBER_HAMMER,
                         FROST_HAMMER, TIDE_HAMMER -> "";
                 case POTATO_COMPASS -> "Sneak + right-click: Lodestone, glowing players within 30 blocks. 25 s cooldown.";
@@ -1654,7 +1672,32 @@ final class Items {
             return all;
         }
 
-        /** The two gradient colours for this item's name. */
+        /**
+     * Lore styled like the other plugins: a divider, a coloured label before each colon, and gray
+     * body text. Lines without a colon are plain gray.
+     */
+    static java.util.List<Component> styledLore(String[] lines) {
+        String divider = "<gradient:#4FC3F7:#7E57C2>━━━━━━━━━━━━━━━━━━━━━━━━━━━━</gradient>";
+        List<Component> out = new ArrayList<>();
+        out.add(Text.parse(divider));
+        for (String line : lines) {
+            int colon = line.indexOf(": ");
+            if (colon > 0) {
+                String label = line.substring(0, colon);
+                String body = line.substring(colon + 2);
+                String color = label.startsWith("Passive") ? "#FFD27F"
+                        : label.startsWith("Sneak") ? "#7FDBFF" : "#C8B6FF";
+                out.add(Text.parse("<dark_gray>◆ </dark_gray><" + color + "><bold>" + Text.esc(label) + "</bold></" + color + "> <gray>"
+                        + Text.esc(body) + "</gray>"));
+            } else {
+                out.add(Text.parse("<gray>" + Text.esc(line) + "</gray>"));
+            }
+        }
+        out.add(Text.parse(divider));
+        return out;
+    }
+
+    /** The two gradient colours for this item's name. */
         public String[] colors() {
             org.bukkit.configuration.file.FileConfiguration cfg = config.get();
             if (cfg != null) {
@@ -1676,6 +1719,7 @@ final class Items {
                 case POTATO_SCROLL -> new String[] {"#FFE0B2", "#A1887F"};
                 case SQ_DISENGAGER -> new String[] {"#FFD700", "#FF8C00"};
                 case A_PLANE -> new String[] {"#90CAF9", "#1565C0"};
+                case DEATH_NOTE -> new String[] {"#8B0000", "#2B0000"};
                 case HIERARCHY_HAMMER -> new String[] {"#FFD54F", "#FF6F00"};
                 case EMBER_HAMMER -> new String[] {"#FF8A65", "#BF360C"};
                 case FROST_HAMMER -> new String[] {"#B3E5FC", "#0277BD"};
@@ -1746,8 +1790,8 @@ final class Items {
     private ItemStack build(Kind kind, UUID uid) {
         ItemStack stack = new ItemStack(kind.material());
         ItemMeta meta = stack.getItemMeta();
-        meta.displayName(kind.displayComponent());
-        meta.lore(Arrays.stream(kind.fullLore()).map(Text::parse).toList());
+        meta.displayName(kind == Kind.DEATH_NOTE ? DeathNoteManager.nameComponent(0) : kind.displayComponent());
+        meta.lore(Items.Kind.styledLore(kind.fullLore()));
         meta.setEnchantmentGlintOverride(true);
         if (kind == Kind.WARRIORS_BLADE) {
             meta.setUnbreakable(true);
@@ -2614,13 +2658,13 @@ final class PotatoRecipes {
 }
 
 /**
- * The Tuff Snowball. Thrown, it flies for a moment, then a rain of TNT minecarts, anvils,
- * and pointed dripstone falls from above where it stopped.
+ * The Tuff Snowball. Thrown, it flies for a moment, then a rain of TNT minecarts and
+ * pointed dripstone falls from above where it stopped.
  *
  * Rules:
  *  - TNT minecarts never break blocks. Vanilla explosions on them are cancelled, and on
  *    landing they deal their own area damage, falling off with distance from the centre.
- *  - Anvils and dripstone are falling blocks that don't drop items. They hurt entities as
+ *  - Pointed dripstone is a falling block that doesn't drop items. They hurt entities as
  *    vanilla falling blocks do.
  *  - The thrower takes no damage from any of it. Falling blocks are tagged with the thrower's
  *    UUID and their hits on that player are cancelled. Blasts skip the thrower.
@@ -2730,17 +2774,12 @@ final class TuffSnowballManager implements Listener {
 
         center.getWorld().spawnParticle(Particle.CLOUD, spawn, 8, 0.5, 0.5, 0.5, 0.02);
         int tnt = Math.max(0, cfg.getInt("tuff_snowball.weights.tnt_minecart", 50));
-        int anvil = Math.max(0, cfg.getInt("tuff_snowball.weights.anvil", 25));
         int dripstone = Math.max(0, cfg.getInt("tuff_snowball.weights.pointed_dripstone", 25));
-        int total = Math.max(1, tnt + anvil + dripstone);
+        int total = Math.max(1, tnt + dripstone);
         int roll = random.nextInt(total);
 
         if (roll < tnt) {
             spawnCart(spawn, thrower);
-        } else if (roll < tnt + anvil) {
-            spawnFalling(spawn, Material.ANVIL, thrower,
-                    (float) cfg.getDouble("tuff_snowball.anvil_damage_per_block", 2.0),
-                    cfg.getInt("tuff_snowball.anvil_max_damage", 40));
         } else {
             spawnFalling(spawn, Material.POINTED_DRIPSTONE, thrower,
                     (float) cfg.getDouble("tuff_snowball.dripstone_damage_per_block", 2.0),
@@ -3182,7 +3221,7 @@ final class PassiveManager implements Listener {
         }
         if (event.getDamager() instanceof Arrow arrow
                 && arrow.getPersistentDataContainer().has(arrowKey, PersistentDataType.BYTE)) {
-            event.setDamage(event.getDamage() * 1.5 + 2.0);
+            event.setDamage(plugin.getConfig().getDouble("abilities.potato_bow.arrow_damage", 12.0));
         }
         if (event.getEntity() instanceof Player victim && shieldUp(victim)
                 && event.getDamager() instanceof LivingEntity attacker
@@ -4361,7 +4400,7 @@ final class SqDisengagerListener implements Listener {
  */
 final class SafezoneManager implements Listener, CommandExecutor {
 
-    record Zone(String world, int x1, int y1, int z1, int x2, int y2, int z2) {
+    record Zone(String name, String world, int x1, int y1, int z1, int x2, int y2, int z2) {
 
         boolean contains(Location location) {
             if (location.getWorld() == null || !location.getWorld().getName().equals(world)) {
@@ -4374,16 +4413,23 @@ final class SafezoneManager implements Listener, CommandExecutor {
         }
 
         String serialize() {
-            return world + "," + x1 + "," + y1 + "," + z1 + "," + x2 + "," + y2 + "," + z2;
+            return name + "|" + world + "," + x1 + "," + y1 + "," + z1 + "," + x2 + "," + y2 + "," + z2;
         }
 
-        static Zone parse(String raw) {
-            String[] parts = raw.split(",");
+        static Zone parse(String raw, int index) {
+            String name = "zone-" + index;
+            String body = raw;
+            int bar = raw.indexOf('|');
+            if (bar >= 0) {
+                name = raw.substring(0, bar);
+                body = raw.substring(bar + 1);
+            }
+            String[] parts = body.split(",");
             if (parts.length != 7) {
                 return null;
             }
             try {
-                return new Zone(parts[0], Integer.parseInt(parts[1]), Integer.parseInt(parts[2]),
+                return new Zone(name, parts[0], Integer.parseInt(parts[1]), Integer.parseInt(parts[2]),
                         Integer.parseInt(parts[3]), Integer.parseInt(parts[4]), Integer.parseInt(parts[5]),
                         Integer.parseInt(parts[6]));
             } catch (NumberFormatException ex) {
@@ -4403,11 +4449,12 @@ final class SafezoneManager implements Listener, CommandExecutor {
         this.plugin = plugin;
         this.wandKey = new NamespacedKey(plugin, "safezone_wand");
         for (String raw : plugin.data().safezones()) {
-            Zone zone = Zone.parse(raw);
+            Zone zone = Zone.parse(raw, zones.size() + 1);
             if (zone != null) {
                 zones.add(zone);
             }
         }
+        org.bukkit.Bukkit.getScheduler().runTaskTimer(plugin, this::tickCombat, 10L, 10L);
     }
 
     @Override
@@ -4422,8 +4469,10 @@ final class SafezoneManager implements Listener, CommandExecutor {
         }
         if (command.getName().equalsIgnoreCase("safezonewand")) {
             giveWand(player);
+        } else if (command.getName().equalsIgnoreCase("confirm")) {
+            confirm(player, args);
         } else {
-            confirm(player);
+            manage(player, args);
         }
         return true;
     }
@@ -4433,7 +4482,7 @@ final class SafezoneManager implements Listener, CommandExecutor {
         ItemMeta meta = wand.getItemMeta();
         meta.displayName(Text.gradient("Safezone Wand", "#7CFC00", "#00C853"));
         meta.lore(List.of(Text.parse("<gray>Right-click two blocks to mark the corners."),
-                Text.parse("<gray>Then type /confirm to create the safezone.")));
+                Text.parse("<gray>Then type /confirm <name> to create the safezone.")));
         meta.getPersistentDataContainer().set(wandKey, PersistentDataType.BYTE, (byte) 1);
         wand.setItemMeta(meta);
         player.getInventory().addItem(wand).values()
@@ -4477,7 +4526,7 @@ final class SafezoneManager implements Listener, CommandExecutor {
             selection[1] = corner;
             originals.get(id)[1] = corner.getBlock().getBlockData().clone();
             corner.getBlock().setType(Material.GLOWSTONE);
-            player.sendMessage(Text.msg("<gray>Corner 2 set. Type <white>/confirm</white> to create the safezone."));
+            player.sendMessage(Text.msg("<gray>Corner 2 set. Type <white>/confirm <name></white> to create the safezone."));
         }
     }
 
@@ -4495,7 +4544,7 @@ final class SafezoneManager implements Listener, CommandExecutor {
         }
     }
 
-    private void confirm(Player player) {
+    private void confirm(Player player, String[] args) {
         Location[] selection = selections.get(player.getUniqueId());
         if (selection == null || selection[0] == null || selection[1] == null) {
             player.sendMessage(Text.msg("<red>Select two corners with /safezonewand first."));
@@ -4505,22 +4554,78 @@ final class SafezoneManager implements Listener, CommandExecutor {
             player.sendMessage(Text.msg("<red>The two corners are in different worlds."));
             return;
         }
-        Zone zone = new Zone(selection[0].getWorld().getName(),
+        if (args.length == 0 || !isValidZoneName(args[0])) {
+            player.sendMessage(Text.msg("<red>Name the safezone: <white>/confirm <name></white>. Use letters, numbers, _ or - (up to 32)."));
+            return;
+        }
+        String name = args[0];
+        if (findZone(name) != null) {
+            player.sendMessage(Text.msg("<red>A safezone called <white>" + Text.esc(name) + "</white> already exists."));
+            return;
+        }
+        Zone zone = new Zone(name, selection[0].getWorld().getName(),
                 Math.min(selection[0].getBlockX(), selection[1].getBlockX()),
-                Math.min(selection[0].getBlockY(), selection[1].getBlockY()),
+                selection[0].getWorld().getMinHeight(),
                 Math.min(selection[0].getBlockZ(), selection[1].getBlockZ()),
                 Math.max(selection[0].getBlockX(), selection[1].getBlockX()),
-                Math.max(selection[0].getBlockY(), selection[1].getBlockY()),
+                selection[0].getWorld().getMaxHeight() - 1,
                 Math.max(selection[0].getBlockZ(), selection[1].getBlockZ()));
         zones.add(zone);
+        saveZones();
+        restoreCorners(player.getUniqueId());
+        selections.remove(player.getUniqueId());
+        player.sendMessage(Text.msg("<green>Safezone <white>" + Text.esc(name) + "</white> created."));
+    }
+
+    /** Writes every zone, with its name, to the data file. */
+    private void saveZones() {
         List<String> saved = new ArrayList<>();
         for (Zone existing : zones) {
             saved.add(existing.serialize());
         }
         plugin.data().setSafezones(saved);
-        restoreCorners(player.getUniqueId());
-        selections.remove(player.getUniqueId());
-        player.sendMessage(Text.msg("<green>Safezone created."));
+    }
+
+    private static boolean isValidZoneName(String name) {
+        return name.matches("[A-Za-z0-9_-]{1,32}");
+    }
+
+    private Zone findZone(String name) {
+        for (Zone zone : zones) {
+            if (zone.name().equalsIgnoreCase(name)) {
+                return zone;
+            }
+        }
+        return null;
+    }
+
+    /** /safezone delete <name> and /safezone list. Operators only (checked in onCommand). */
+    private void manage(Player player, String[] args) {
+        if (args.length == 2 && args[0].equalsIgnoreCase("delete")) {
+            Zone zone = findZone(args[1]);
+            if (zone == null) {
+                player.sendMessage(Text.msg("<red>No safezone called <white>" + Text.esc(args[1]) + "</white>."));
+                return;
+            }
+            zones.remove(zone);
+            saveZones();
+            player.sendMessage(Text.msg("<green>Safezone <white>" + Text.esc(zone.name()) + "</white> deleted."));
+        } else if (args.length == 1 && args[0].equalsIgnoreCase("list")) {
+            if (zones.isEmpty()) {
+                player.sendMessage(Text.msg("<gray>No safezones yet."));
+                return;
+            }
+            StringBuilder names = new StringBuilder();
+            for (Zone zone : zones) {
+                if (names.length() > 0) {
+                    names.append(", ");
+                }
+                names.append(Text.esc(zone.name()));
+            }
+            player.sendMessage(Text.msg("<gray>Safezones: <white>" + names + "</white>"));
+        } else {
+            player.sendMessage(Text.msg("<gray>Usage: <white>/safezone delete <name></white> or <white>/safezone list</white>."));
+        }
     }
 
     /** True for a non-operator standing in a safezone. Operators are never restricted. */
@@ -4585,14 +4690,60 @@ final class SafezoneManager implements Listener, CommandExecutor {
 
     @EventHandler
     public void onCombat(EntityDamageByEntityEvent event) {
-        long until = System.currentTimeMillis() + plugin.getConfig().getLong("safezone.combat_seconds", 30) * 1000L;
+        long until = System.currentTimeMillis() + combatSeconds() * 1000L;
         if (event.getEntity() instanceof Player victim) {
-            combatUntil.put(victim.getUniqueId(), until);
+            tagCombat(victim, until);
         }
         if (event.getDamager() instanceof Player attacker) {
-            combatUntil.put(attacker.getUniqueId(), until);
+            tagCombat(attacker, until);
         } else if (event.getDamager() instanceof Projectile projectile && projectile.getShooter() instanceof Player shooter) {
-            combatUntil.put(shooter.getUniqueId(), until);
+            tagCombat(shooter, until);
+        }
+    }
+
+    /** Length of combat, in seconds. Set with combat.seconds in config.yml. */
+    private long combatSeconds() {
+        return Math.max(1L, plugin.getConfig().getLong("combat.seconds",
+                plugin.getConfig().getLong("safezone.combat_seconds", 30)));
+    }
+
+    /** Starts combat for a player, or extends it. Says so in chat the first time. */
+    private void tagCombat(Player player, long until) {
+        boolean already = inCombat(player);
+        combatUntil.put(player.getUniqueId(), until);
+        if (!already && plugin.getConfig().getBoolean("combat.messages", true)) {
+            player.sendMessage(Text.msg("<red><bold>Combat started.</bold></red> <gray>Safezones are locked until it ends.</gray>"));
+        }
+    }
+
+    /** Runs every half second: shows the countdown above the hotbar and announces when combat ends. */
+    private void tickCombat() {
+        long now = System.currentTimeMillis();
+        for (UUID id : new ArrayList<>(combatUntil.keySet())) {
+            Long until = combatUntil.get(id);
+            Player player = Bukkit.getPlayer(id);
+            if (until == null) {
+                continue;
+            }
+            if (player == null) {
+                combatUntil.remove(id);
+                continue;
+            }
+            if (now < until) {
+                if (plugin.getConfig().getBoolean("combat.show_action_bar", true)) {
+                    long secs = (until - now + 999L) / 1000L;
+                    player.sendActionBar(Text.parse("<gradient:#FF5F6D:#FFC371><bold>COMBAT</bold></gradient>"
+                            + " <gray>" + secs + "s</gray>"));
+                }
+            } else {
+                combatUntil.remove(id);
+                if (plugin.getConfig().getBoolean("combat.show_action_bar", true)) {
+                    player.sendActionBar(Component.empty());
+                }
+                if (plugin.getConfig().getBoolean("combat.messages", true)) {
+                    player.sendMessage(Text.msg("<green><bold>Combat ended.</bold></green>"));
+                }
+            }
         }
     }
 
@@ -5124,6 +5275,9 @@ final class HierarchyManager implements Listener {
         }, 2L);
     }
 
+    /** When each player can leap with the hammer again. */
+    private final Map<UUID, Long> leapReadyAt = new HashMap<>();
+
     /** Right-click slams. Sneak + right-click aim-locks the nearest player in front of you. */
     @EventHandler
     public void onHammerUse(PlayerInteractEvent event) {
@@ -5140,6 +5294,15 @@ final class HierarchyManager implements Listener {
         }
         event.setCancelled(true);
         Player player = event.getPlayer();
+        long now = System.currentTimeMillis();
+        long readyAt = leapReadyAt.getOrDefault(player.getUniqueId(), 0L);
+        if (now < readyAt) {
+            long secs = (readyAt - now + 999L) / 1000L;
+            player.sendActionBar(Text.parse("<gray>Hammer recharging: <white>" + secs + "s</white>"));
+            return;
+        }
+        leapReadyAt.put(player.getUniqueId(),
+                now + plugin.getConfig().getLong("hammer.cooldown_seconds", 8L) * 1000L);
         if (player.isSneaking()) {
             Player target = aimedPlayer(player);
             if (target == null) {
@@ -5364,5 +5527,262 @@ final class HierarchyCommand implements CommandExecutor {
         if (entries.isEmpty()) {
             sender.sendMessage(Text.parse("<gray>No kills recorded yet."));
         }
+    }
+}
+
+/**
+ * /fillwand (operators only). Right-click two blocks with the Fill Wand to mark a box, then
+ * /fillwand fill <block> fills the whole box with that block. The wand never changes the corners.
+ */
+final class FillWandManager implements Listener, CommandExecutor, TabCompleter {
+
+    private final PotatoSMP plugin;
+    private final NamespacedKey wandKey;
+    private final Map<UUID, Location[]> selections = new HashMap<>();
+
+    FillWandManager(PotatoSMP plugin) {
+        this.plugin = plugin;
+        this.wandKey = new NamespacedKey(plugin, "fill_wand");
+    }
+
+    @Override
+    public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (!sender.hasPermission("potato.admin")) {
+            sender.sendMessage(Text.msg("<red>You don't have permission to do that."));
+            return true;
+        }
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(Text.msg("<red>Only players can do that."));
+            return true;
+        }
+        if (args.length == 0) {
+            giveWand(player);
+        } else if (args.length == 2 && args[0].equalsIgnoreCase("fill")) {
+            fill(player, args[1]);
+        } else if (args.length == 1 && args[0].equalsIgnoreCase("clear")) {
+            selections.remove(player.getUniqueId());
+            player.sendMessage(Text.msg("<gray>Selection cleared."));
+        } else {
+            player.sendMessage(Text.msg("<gray>Usage: <white>/fillwand</white> gets the wand. "
+                    + "<white>/fillwand fill <block></white> fills the box. <white>/fillwand clear</white> resets it."));
+        }
+        return true;
+    }
+
+    private void giveWand(Player player) {
+        ItemStack wand = new ItemStack(Material.BRUSH);
+        ItemMeta meta = wand.getItemMeta();
+        meta.displayName(Text.gradient("Fill Wand", "#4FC3F7", "#7E57C2"));
+        meta.lore(Items.Kind.styledLore(new String[] {
+                "Right-click two blocks to mark the corners of a box.",
+                "Then type /fillwand fill <block> to fill the box."}));
+        meta.getPersistentDataContainer().set(wandKey, PersistentDataType.BYTE, (byte) 1);
+        wand.setItemMeta(meta);
+        player.getInventory().addItem(wand).values()
+                .forEach(overflow -> player.getWorld().dropItemNaturally(player.getLocation(), overflow));
+        player.sendMessage(Text.msg("<green>Fill wand given."));
+    }
+
+    private boolean isWand(ItemStack stack) {
+        if (stack == null || stack.getType().isAir() || !stack.hasItemMeta()) {
+            return false;
+        }
+        return stack.getItemMeta().getPersistentDataContainer().has(wandKey, PersistentDataType.BYTE);
+    }
+
+    @EventHandler
+    public void onUse(PlayerInteractEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND || !isWand(event.getItem())) {
+            return;
+        }
+        event.setCancelled(true);
+        Player player = event.getPlayer();
+        if (!player.hasPermission("potato.admin") || event.getAction() != Action.RIGHT_CLICK_BLOCK
+                || event.getClickedBlock() == null) {
+            return;
+        }
+        Location corner = event.getClickedBlock().getLocation();
+        Location[] sel = selections.computeIfAbsent(player.getUniqueId(), key -> new Location[2]);
+        if (sel[0] == null || sel[1] != null) {
+            sel[0] = corner;
+            sel[1] = null;
+            player.sendMessage(Text.msg("<gray>Corner 1 set. Right-click the opposite corner."));
+        } else {
+            sel[1] = corner;
+            player.sendMessage(Text.msg("<gray>Corner 2 set. Type <white>/fillwand fill <block></white>."));
+        }
+    }
+
+    private void fill(Player player, String raw) {
+        Location[] sel = selections.get(player.getUniqueId());
+        if (sel == null || sel[0] == null || sel[1] == null) {
+            player.sendMessage(Text.msg("<red>Mark two corners with the Fill Wand first."));
+            return;
+        }
+        if (!sel[0].getWorld().equals(sel[1].getWorld())) {
+            player.sendMessage(Text.msg("<red>The two corners are in different worlds."));
+            return;
+        }
+        Material material = Material.matchMaterial(raw.trim().toUpperCase(Locale.ROOT));
+        if (material == null || !material.isBlock() || material.isAir()) {
+            player.sendMessage(Text.msg("<red>Unknown block: <white>" + Text.esc(raw) + "</white>"));
+            return;
+        }
+        int minX = Math.min(sel[0].getBlockX(), sel[1].getBlockX());
+        int maxX = Math.max(sel[0].getBlockX(), sel[1].getBlockX());
+        int minY = Math.min(sel[0].getBlockY(), sel[1].getBlockY());
+        int maxY = Math.max(sel[0].getBlockY(), sel[1].getBlockY());
+        int minZ = Math.min(sel[0].getBlockZ(), sel[1].getBlockZ());
+        int maxZ = Math.max(sel[0].getBlockZ(), sel[1].getBlockZ());
+        long volume = (long) (maxX - minX + 1) * (maxY - minY + 1) * (maxZ - minZ + 1);
+        long limit = Math.max(1L, plugin.getConfig().getLong("fillwand.max_blocks", 50000));
+        if (volume > limit) {
+            player.sendMessage(Text.msg("<red>That box is " + volume + " blocks. The limit is " + limit + "."));
+            return;
+        }
+        org.bukkit.World world = sel[0].getWorld();
+        int changed = 0;
+        for (int x = minX; x <= maxX; x++) {
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    org.bukkit.block.Block block = world.getBlockAt(x, y, z);
+                    if (block.getType() != material) {
+                        block.setType(material, false);
+                        changed++;
+                    }
+                }
+            }
+        }
+        player.sendMessage(Text.msg("<green>Filled " + changed + " blocks with <white>"
+                + material.name().toLowerCase(Locale.ROOT).replace('_', ' ') + "</white>."));
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        List<String> out = new ArrayList<>();
+        if (args.length == 1) {
+            for (String sub : List.of("fill", "clear")) {
+                if (sub.startsWith(args[0].toLowerCase(Locale.ROOT))) {
+                    out.add(sub);
+                }
+            }
+        } else if (args.length == 2 && args[0].equalsIgnoreCase("fill")) {
+            String prefix = args[1].toLowerCase(Locale.ROOT);
+            for (Material m : Material.values()) {
+                if (m.isBlock() && !m.isAir() && m.name().toLowerCase(Locale.ROOT).startsWith(prefix)) {
+                    out.add(m.name().toLowerCase(Locale.ROOT));
+                    if (out.size() >= 40) {
+                        break;
+                    }
+                }
+            }
+        }
+        return out;
+    }
+}
+
+/**
+ * The Death Note: a Writable Book. Write a player's name in the book, then press Done. Every
+ * online player whose name is written dies. The edit is cancelled, so the book goes back to
+ * blank and can be used again. The name shimmers in your hand.
+ */
+final class DeathNoteManager implements Listener {
+
+    private static final String[] SHADES = {"#2B0000", "#5C0000", "#8B0000", "#B71C1C", "#E53935", "#B71C1C", "#8B0000", "#5C0000"};
+
+    private final PotatoSMP plugin;
+    private final Set<UUID> noteVictims = new HashSet<>();
+    private int phase = 0;
+
+    DeathNoteManager(PotatoSMP plugin) {
+        this.plugin = plugin;
+        Bukkit.getScheduler().runTaskTimer(plugin, this::shimmer, 4L, 4L);
+    }
+
+    /** The name: bold, strikethrough, dark red, with a shade that moves across the letters. */
+    static Component nameComponent(int phase) {
+        String text = "Death Note";
+        StringBuilder mini = new StringBuilder("<bold><strikethrough>");
+        for (int i = 0; i < text.length(); i++) {
+            String hex = SHADES[Math.floorMod(i + phase, SHADES.length)];
+            mini.append("<color:").append(hex).append(">").append(text.charAt(i)).append("</color>");
+        }
+        mini.append("</strikethrough></bold>");
+        return Text.parse(mini.toString());
+    }
+
+    /** Moves the shimmer one step and updates every Death Note in every online inventory. */
+    private void shimmer() {
+        phase = (phase + 1) % SHADES.length;
+        Component name = nameComponent(phase);
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            ItemStack[] contents = player.getInventory().getContents();
+            for (int i = 0; i < contents.length; i++) {
+                ItemStack stack = contents[i];
+                if (stack != null && plugin.items().kindOf(stack) == Items.Kind.DEATH_NOTE) {
+                    ItemMeta meta = stack.getItemMeta();
+                    meta.displayName(name);
+                    stack.setItemMeta(meta);
+                    player.getInventory().setItem(i, stack);
+                }
+            }
+        }
+    }
+
+    /** Closing the book reads it. The edit is cancelled, so the book stays blank. */
+    @EventHandler
+    public void onEdit(PlayerEditBookEvent event) {
+        if (!plugin.isPotatoFeatureEnabled()) {
+            return;
+        }
+        Player player = event.getPlayer();
+        if (!isHoldingNote(player)) {
+            return;
+        }
+        event.setSigning(false);
+        event.setCancelled(true);
+        for (Component page : event.getNewBookMeta().getPages()) {
+            String text = PlainTextComponentSerializer.plainText().serialize(page);
+            for (String raw : text.split("\\R")) {
+                Player found = onlineNamed(raw.trim());
+                if (found != null) {
+                    kill(player, found.getName());
+                }
+            }
+        }
+    }
+
+    private boolean isHoldingNote(Player player) {
+        return plugin.items().kindOf(player.getInventory().getItemInMainHand()) == Items.Kind.DEATH_NOTE
+                || plugin.items().kindOf(player.getInventory().getItemInOffHand()) == Items.Kind.DEATH_NOTE;
+    }
+
+    private void kill(Player writer, String name) {
+        Player victim = onlineNamed(name);
+        if (victim == null) {
+            writer.sendMessage(Text.msg("<red>" + Text.esc(name) + " is not online anymore."));
+            return;
+        }
+        noteVictims.add(victim.getUniqueId());
+        victim.setHealth(0.0);
+        writer.sendMessage(Text.msg("<dark_red>" + Text.esc(victim.getName()) + "</dark_red> <gray>is written in the Death Note.</gray>"));
+    }
+
+    private Player onlineNamed(String name) {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (player.getName().equalsIgnoreCase(name)) {
+                return player;
+            }
+        }
+        return null;
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onDeath(PlayerDeathEvent event) {
+        if (!noteVictims.remove(event.getEntity().getUniqueId())) {
+            return;
+        }
+        event.deathMessage(Text.parse("<dark_red><bold>" + Text.esc(event.getEntity().getName())
+                + "</bold></dark_red> <gray>Killed by</gray> <dark_red><bold>DEATH NOTE</bold></dark_red>"));
     }
 }
