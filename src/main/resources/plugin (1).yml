@@ -1,0 +1,42 @@
+name: PotatoSMP
+version: '1.0.0'
+main: PotatoSMP
+api-version: '1.21'
+description: Potato SMP - Potato of Life, Marked players, the Warrior's Blade, and safezones.
+authors: [PotatoSMP]
+commands:
+  potato:
+    description: Potato SMP command (operators only, except recipes and trust).
+    usage: /potato <help|menu|status|blade|give|reload|enable|disable|stop|recipes|nocooldown|trust>
+    aliases: [potatosmp]
+  safezonewand:
+    description: Get the safezone wand (operators only).
+    usage: /safezonewand
+    permission: potato.admin
+  hierarchyhammer:
+    description: Summon the Hierarchy Hammer altar (operators only).
+    usage: /hierarchyhammer summon altar
+    permission: potato.admin
+  leaderboard:
+    description: Show the kill leaderboard.
+    usage: /leaderboard kills
+    permission: potato.use
+  confirm:
+    description: Create a safezone from the two selected corners, with a name (operators only).
+    usage: /confirm <name>
+    permission: potato.admin
+  safezone:
+    description: Manage safezones (operators only). Delete one by name, or list them.
+    usage: /safezone <delete <name> | list>
+    permission: potato.admin
+  fillwand:
+    description: Fill wand. Mark two corners, then fill the box with a block (operators only).
+    usage: /fillwand [fill <block> | clear]
+    permission: potato.admin
+permissions:
+  potato.use:
+    description: Use /potato recipes, /potato trust, and /leaderboard kills.
+    default: true
+  potato.admin:
+    description: Everything under /potato except recipes and trust, plus /hierarchyhammer, /safezonewand, /confirm, and /fillwand.
+    default: op
