@@ -62,6 +62,8 @@ import org.bukkit.event.enchantment.PrepareItemEnchantEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.vehicle.VehicleDamageEvent;
+import org.bukkit.event.vehicle.VehicleDestroyEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.entity.ItemDespawnEvent;
@@ -308,13 +310,21 @@ public final class PotatoSMP extends JavaPlugin {
                 && permissible.hasPermission("potato.admin");
     }
 
-    /** When true, item cooldowns are skipped and their timers are hidden. Set by /potato nocooldown. */
-    public boolean noCooldowns() {
-        return data != null && data.noCooldowns();
+    /** True if this player skips item cooldowns. Set with /potato nocooldown <true|false> <player>. */
+    public boolean noCooldowns(UUID id) {
+        return data != null && data.noCooldownPlayers().contains(id.toString());
     }
 
-    public void setNoCooldowns(boolean value) {
-        data.setNoCooldowns(value);
+    public void setNoCooldowns(UUID id, boolean value) {
+        List<String> list = new ArrayList<>(data.noCooldownPlayers());
+        if (value) {
+            if (!list.contains(id.toString())) {
+                list.add(id.toString());
+            }
+        } else {
+            list.remove(id.toString());
+        }
+        data.setNoCooldownPlayers(list);
     }
 
     public HierarchyManager hierarchy() {
@@ -438,7 +448,7 @@ final class A5Manager implements Listener {
             return;
         }
         long ready = readyAt.getOrDefault(casterId, 0L);
-        if (!sq && !plugin.noCooldowns() && now < ready) {
+        if (!sq && !plugin.noCooldowns(casterId) && now < ready) {
             caster.sendActionBar(Text.itemCooldown(kind, ((ready - now) + 999L) / 1000L));
             return;
         }
@@ -980,14 +990,20 @@ final class PotatoCommand implements CommandExecutor, TabCompleter {
             deny(sender);
             return;
         }
-        if (args.length < 2 || !(args[1].equalsIgnoreCase("true") || args[1].equalsIgnoreCase("false"))) {
-            sender.sendMessage(Text.msg("<red>Usage: /potato nocooldown <true|false>"));
+        if (args.length < 3 || !(args[1].equalsIgnoreCase("true") || args[1].equalsIgnoreCase("false"))) {
+            sender.sendMessage(Text.msg("<red>Usage: /potato nocooldown <true|false> <player>"));
+            return;
+        }
+        Player target = Bukkit.getPlayerExact(args[2]);
+        if (target == null) {
+            sender.sendMessage(Text.msg("<red>" + Text.esc(args[2]) + " is not online."));
             return;
         }
         boolean value = Boolean.parseBoolean(args[1]);
-        plugin.setNoCooldowns(value);
-        sender.sendMessage(Text.msg(value ? "<green>Item cooldowns are off for everyone."
-                : "<yellow>Item cooldowns are back on."));
+        plugin.setNoCooldowns(target.getUniqueId(), value);
+        sender.sendMessage(Text.msg(value
+                ? "<green>" + Text.esc(target.getName()) + " skips item cooldowns now."
+                : "<yellow>" + Text.esc(target.getName()) + " has item cooldowns again."));
     }
 
     private static void deny(CommandSender sender) {
@@ -1209,12 +1225,13 @@ final class DataStore {
         save();
     }
 
-    public boolean noCooldowns() {
-        return yml.getBoolean("no_cooldowns", false);
+    /** UUIDs (as text) of players who skip item cooldowns. */
+    public List<String> noCooldownPlayers() {
+        return yml.getStringList("no_cooldown_players");
     }
 
-    public void setNoCooldowns(boolean value) {
-        yml.set("no_cooldowns", value);
+    public void setNoCooldownPlayers(List<String> value) {
+        yml.set("no_cooldown_players", value);
         save();
     }
 
@@ -3086,7 +3103,7 @@ final class PassiveManager implements Listener {
         Component line = null;
         if (main == Items.Kind.POTATO_A5_STRIKE || main == Items.Kind.ENCHANTED_POTATO_A5_STRIKE) {
             long left = plugin.a5().remainingMillis(id);
-            if (left > 0 && !plugin.noCooldowns()) {
+            if (left > 0 && !plugin.noCooldowns(id)) {
                 line = Text.itemCooldown(main, (left + 999L) / 1000L);
             }
         }
@@ -3281,7 +3298,7 @@ final class ItemAbilities implements Listener {
     private boolean ready(Player player, Items.Kind kind) {
         long now = System.currentTimeMillis();
         long at = readyAt.getOrDefault(player.getUniqueId(), Map.of()).getOrDefault(kind, 0L);
-        if (!plugin.noCooldowns() && now < at) {
+        if (!plugin.noCooldowns(player.getUniqueId()) && now < at) {
             player.sendActionBar(Text.itemCooldown(kind, (at - now + 999L) / 1000L));
             return false;
         }
@@ -3441,7 +3458,7 @@ final class SecondAbilities implements Listener {
     private void run(Player player, Items.Kind kind) {
         long now = System.currentTimeMillis();
         long at = readyAt.getOrDefault(player.getUniqueId(), Map.of()).getOrDefault(kind, 0L);
-        if (!plugin.noCooldowns() && now < at) {
+        if (!plugin.noCooldowns(player.getUniqueId()) && now < at) {
             player.sendActionBar(Text.itemCooldown(kind, (at - now + 999L) / 1000L));
             return;
         }
@@ -4144,7 +4161,7 @@ final class OverlordListener implements Listener {
         }
         long now = System.currentTimeMillis();
         long ready = readyAt.getOrDefault(player.getUniqueId(), 0L);
-        if (!plugin.noCooldowns() && now < ready) {
+        if (!plugin.noCooldowns(player.getUniqueId()) && now < ready) {
             player.sendActionBar(Text.itemCooldown(Items.Kind.POTATO_OVERLORD, (ready - now + 999L) / 1000L));
             return;
         }
@@ -4856,6 +4873,7 @@ final class PlaneManager implements Listener {
         Boat plane = pilot.getWorld().spawn(spawn, Boat.class);
         plane.setGravity(false);
         plane.setPersistent(false);
+        plane.setInvulnerable(true);
         plane.getPersistentDataContainer().set(planeKey, PersistentDataType.BYTE, (byte) 1);
         plane.addPassenger(pilot);
         planes.put(pilot.getUniqueId(), plane);
@@ -4863,7 +4881,7 @@ final class PlaneManager implements Listener {
         fly(pilot, plane);
     }
 
-    /** Each tick, the plane moves where the pilot looks. */
+    /** Each tick, the plane is teleported forward in the direction the pilot looks. */
     private void fly(Player pilot, Boat plane) {
         double speed = plugin.getConfig().getDouble("plane.speed", 0.9);
         new BukkitRunnable() {
@@ -4874,10 +4892,37 @@ final class PlaneManager implements Listener {
                     cancel();
                     return;
                 }
-                plane.setVelocity(pilot.getLocation().getDirection().multiply(speed));
-                pilot.getWorld().spawnParticle(Particle.CLOUD, plane.getLocation(), 2, 0.2, 0.1, 0.2, 0.01);
+                Location pilotLoc = pilot.getLocation();
+                Vector dir = pilotLoc.getDirection();
+                Location next = plane.getLocation().add(dir.clone().multiply(speed));
+                next.setYaw(pilotLoc.getYaw());
+                next.setPitch(0f);
+                plane.teleport(next);
+                pilot.getWorld().spawnParticle(Particle.CLOUD, next, 2, 0.2, 0.1, 0.2, 0.01);
             }
         }.runTaskTimer(plugin, 1L, 1L);
+    }
+
+    /** The plane can't be broken or hurt by anything. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onPlaneHurt(EntityDamageEvent event) {
+        if (event.getEntity().getPersistentDataContainer().has(planeKey, PersistentDataType.BYTE)) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onPlaneVehicleHurt(VehicleDamageEvent event) {
+        if (event.getVehicle().getPersistentDataContainer().has(planeKey, PersistentDataType.BYTE)) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onPlaneDestroyed(VehicleDestroyEvent event) {
+        if (event.getVehicle().getPersistentDataContainer().has(planeKey, PersistentDataType.BYTE)) {
+            event.setCancelled(true);
+        }
     }
 
     private void land(UUID pilotId, Boat plane) {
@@ -5013,7 +5058,7 @@ final class BomberManager implements Listener {
     private void summon(Player player) {
         UUID owner = player.getUniqueId();
         if (bombers.containsKey(owner)) {
-            player.sendMessage(Text.msg("<red>Your bomber is already flying. Use the Bomber Stopper first."));
+            player.sendMessage(Text.msg("<red>Your bomber is already flying. Right-click the Bomber Stopper to stop it."));
             return;
         }
         Vector forward = player.getLocation().getDirection().setY(0);
@@ -5024,48 +5069,48 @@ final class BomberManager implements Listener {
         Vector right = forward.clone().crossProduct(new Vector(0, 1, 0)).normalize();
         Location core = player.getEyeLocation().add(forward.clone().multiply(5.0)).add(0, 3, 0);
 
+        Vector[] offsets = {new Vector(0, 0, 0), right.clone().multiply(2.5),
+                right.clone().multiply(-2.5).add(forward.clone().multiply(-1.0))};
         List<Mob> parts = new ArrayList<>();
-        Location[] spots = {core, core.clone().add(right.clone().multiply(2.5)),
-                core.clone().add(right.clone().multiply(-2.5)).add(forward.clone().multiply(-1.0))};
-        for (Location spot : spots) {
+        for (Vector offset : offsets) {
+            Location spot = core.clone().add(offset);
             Phantom phantom = spot.getWorld().spawn(spot, Phantom.class);
             phantom.setAI(false);
             phantom.setGravity(false);
             phantom.setSilent(true);
-            phantom.setPersistent(false);
+            phantom.setPersistent(true);
+            phantom.setRemoveWhenFarAway(false);
             phantom.setInvulnerable(true);
             phantom.getPersistentDataContainer().set(bomberKey, PersistentDataType.STRING, owner.toString());
             parts.add(phantom);
         }
         bombers.put(owner, parts);
-        player.sendMessage(Text.msg("<green>Bomber summoned. Use the Bomber Stopper to stop it."));
-        fly(player, parts, forward);
+        player.sendMessage(Text.msg("<green>Bomber summoned. Right-click the Bomber Stopper to stop it."));
+        fly(player, parts, offsets, core, forward);
     }
 
-    /** Keeps the formation moving in one direction, and drops a minecart every few ticks. */
-    private void fly(Player player, List<Mob> parts, Vector forward) {
+    /** Moves the formation forward each tick, keeping each part in its place, and drops a minecart every few ticks. */
+    private void fly(Player player, List<Mob> parts, Vector[] offsets, Location core, Vector forward) {
         UUID owner = player.getUniqueId();
         double speed = plugin.getConfig().getDouble("bomber.speed", 0.7);
         int interval = Math.max(5, plugin.getConfig().getInt("bomber.drop_interval_ticks", 40));
+        Location[] head = {core.clone()};
         BukkitTask task = new BukkitRunnable() {
             private int tick = 0;
 
             @Override
             public void run() {
                 tick++;
-                boolean alive = !parts.isEmpty();
                 for (Mob part : parts) {
                     if (!part.isValid()) {
-                        alive = false;
+                        cleanup(owner);
+                        cancel();
+                        return;
                     }
                 }
-                if (!alive) {
-                    cleanup(owner);
-                    cancel();
-                    return;
-                }
-                for (Mob part : parts) {
-                    part.setVelocity(forward.clone().multiply(speed));
+                head[0] = head[0].clone().add(forward.clone().multiply(speed));
+                for (int i = 0; i < parts.size(); i++) {
+                    parts.get(i).teleport(head[0].clone().add(offsets[i]));
                 }
                 if (tick % interval == 0) {
                     dropBomb(owner, parts.get(0).getLocation());
@@ -5073,6 +5118,14 @@ final class BomberManager implements Listener {
             }
         }.runTaskTimer(plugin, 1L, 1L);
         tasks.put(owner, task);
+    }
+
+    /** The bomber can't be hurt by anything. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onBomberHurt(EntityDamageEvent event) {
+        if (event.getEntity().getPersistentDataContainer().has(bomberKey, PersistentDataType.STRING)) {
+            event.setCancelled(true);
+        }
     }
 
     private void stop(Player player) {
@@ -5302,7 +5355,7 @@ final class HierarchyManager implements Listener {
         Player player = event.getPlayer();
         long now = System.currentTimeMillis();
         long readyAt = leapReadyAt.getOrDefault(player.getUniqueId(), 0L);
-        if (now < readyAt) {
+        if (now < readyAt && !plugin.noCooldowns(player.getUniqueId())) {
             long secs = (readyAt - now + 999L) / 1000L;
             player.sendActionBar(Text.parse("<gray>Hammer recharging: <white>" + secs + "s</white>"));
             return;
@@ -5698,6 +5751,7 @@ final class DeathNoteManager implements Listener {
 
     private final PotatoSMP plugin;
     private final Set<UUID> noteVictims = new HashSet<>();
+    private final Map<UUID, Long> readyAt = new HashMap<>();
     private int phase = 0;
 
     DeathNoteManager(PotatoSMP plugin) {
@@ -5747,13 +5801,27 @@ final class DeathNoteManager implements Listener {
         }
         event.setSigning(false);
         event.setCancelled(true);
+        UUID id = player.getUniqueId();
+        long now = System.currentTimeMillis();
+        long ready = readyAt.getOrDefault(id, 0L);
+        if (now < ready && !plugin.noCooldowns(id)) {
+            long secs = (ready - now + 999L) / 1000L;
+            player.sendMessage(Text.msg("<dark_red>The Death Note is recharging: <white>"
+                    + (secs / 60) + "m " + String.format("%02ds", secs % 60) + "</white>."));
+            return;
+        }
+        boolean killed = false;
         for (String text : event.getNewBookMeta().getPages()) {
             for (String raw : text.split("\\R")) {
                 Player found = onlineNamed(raw.trim());
-                if (found != null) {
-                    kill(player, found.getName());
+                if (found != null && kill(player, found.getName())) {
+                    killed = true;
                 }
             }
+        }
+        if (killed) {
+            long seconds = Math.max(1L, plugin.getConfig().getLong("death_note.cooldown_seconds", 3600L));
+            readyAt.put(id, now + seconds * 1000L);
         }
     }
 
@@ -5762,15 +5830,16 @@ final class DeathNoteManager implements Listener {
                 || plugin.items().kindOf(player.getInventory().getItemInOffHand()) == Items.Kind.DEATH_NOTE;
     }
 
-    private void kill(Player writer, String name) {
+    private boolean kill(Player writer, String name) {
         Player victim = onlineNamed(name);
         if (victim == null) {
             writer.sendMessage(Text.msg("<red>" + Text.esc(name) + " is not online anymore."));
-            return;
+            return false;
         }
         noteVictims.add(victim.getUniqueId());
         victim.setHealth(0.0);
         writer.sendMessage(Text.msg("<dark_red>" + Text.esc(victim.getName()) + "</dark_red> <gray>is written in the Death Note.</gray>"));
+        return true;
     }
 
     private Player onlineNamed(String name) {
