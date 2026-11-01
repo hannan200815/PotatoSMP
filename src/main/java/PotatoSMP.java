@@ -10,6 +10,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
@@ -51,7 +52,6 @@ import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.entity.Snowball;
-import org.bukkit.entity.minecart.ExplosiveMinecart;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -80,6 +80,10 @@ import org.bukkit.event.player.PlayerEditBookEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerItemConsumeEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
+import org.bukkit.event.entity.EntityResurrectEvent;
+import org.bukkit.GameMode;
 import org.bukkit.event.player.PlayerLoginEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.inventory.EquipmentSlot;
@@ -101,6 +105,9 @@ import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.entity.EntityTargetEvent;
 import org.bukkit.entity.Mob;
 import org.bukkit.entity.Phantom;
+import org.bukkit.entity.Parrot;
+import org.bukkit.entity.Vex;
+import org.bukkit.entity.minecart.ExplosiveMinecart;
 import org.bukkit.entity.Vehicle;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.vehicle.VehicleExitEvent;
@@ -819,6 +826,7 @@ final class PotatoCommand implements CommandExecutor, TabCompleter {
             case "stop" -> stop(sender);
             case "trust" -> trust(sender, args);
             case "nocooldown" -> noCooldown(sender, args);
+            case "combat" -> combatSetting(sender, args);
             case "recipes", "recipe" -> {
                 if (sender instanceof Player player) {
                     plugin.recipeMenu().open(player);
@@ -983,6 +991,22 @@ final class PotatoCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage(Text.msg("<green>" + Text.esc(args[1]) + " is now trusted. Your hammer moves won't hit them."));
         }
         plugin.data().setTrusted(player.getUniqueId(), trusted);
+    }
+
+    private void combatSetting(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("potato.admin")) {
+            deny(sender);
+            return;
+        }
+        if (args.length < 2 || !(args[1].equalsIgnoreCase("enable") || args[1].equalsIgnoreCase("disable"))) {
+            sender.sendMessage(Text.msg("<red>Usage: /potatosmp combat <enable|disable>"));
+            return;
+        }
+        boolean on = args[1].equalsIgnoreCase("enable");
+        plugin.getConfig().set("combat.enabled", on);
+        plugin.saveConfig();
+        sender.sendMessage(Text.msg(on ? "<green>Combat is on."
+                : "<yellow>Combat is off. Nobody is put in combat, and safezones are open."));
     }
 
     private void noCooldown(CommandSender sender, String[] args) {
@@ -1567,14 +1591,11 @@ final class Items {
                 "KNUCKLE BOOM INTO THE SKY AND GROUND SLAM.",
                 "Right-click to aim, right-click again to dive. No damage while diving."),
         A_PLANE(Material.OAK_BOAT, "A Plane",
-                "Operators only. Right-click to climb in and fly.",
-                "Press Q while flying to drop a TNT minecart. Each drop uses one Firework Star."),
-        BOMBER_SUMMONER(Material.RED_DYE, "Bomber Summoner",
-                "Operators only. Right-click to summon a bomber.",
-                "A phantom formation that flies where you look and drops TNT minecarts."),
-        BOMBER_STOPPER(Material.STONE_BUTTON, "Bomber Stopper",
-                "Operators only. Right-click to stop your bomber.",
-                "The bomber is removed."),
+                "Operators only. Right-click to call 50 parrots. Right-click again to land.",
+                "They circle within 50 blocks and drop 5 TNT minecarts every 3 seconds. They can't be hurt."),
+        MOMISTHATABOMBER(Material.FIRE_CHARGE, "Bomb Dropper",
+                "Operators only. Right-click to call 10 vex. Right-click again to drop.",
+                "Each vex drops a TNT minecart. Sneak + right-click sends them away."),
         DEATH_NOTE(Material.WRITABLE_BOOK, "Death Note", "Write a player's name, then press Done. They die.",
                 "Killed by DEATH NOTE. Every name is a death sentence."),
         HIERARCHY_HAMMER(Material.MACE, "Hierarchy Hammer",
@@ -1667,7 +1688,9 @@ final class Items {
                 case POTATO_WARD -> "Sneak + right-click: Ward Ring, pushing enemies out within 6 blocks. 30 s cooldown.";
                 case POTATO_SLIME, POTATO_GHAST, POTATO_BLAZE, POTATO_QUARTZ, POTATO_ECHO -> "";
                 case DEATH_NOTE -> "Right-click to write a player's name, then press Done. They die.";
-                case SQ_DISENGAGER, A_PLANE, BOMBER_SUMMONER, BOMBER_STOPPER, HIERARCHY_HAMMER, EMBER_HAMMER,
+                case A_PLANE -> "Right-click to call 50 parrots. Right-click again to land. They drop 5 TNT minecarts every 3 seconds.";
+                case MOMISTHATABOMBER -> "Right-click to drop a TNT minecart from each vex. Sneak + right-click sends them away.";
+                case SQ_DISENGAGER, HIERARCHY_HAMMER, EMBER_HAMMER,
                         FROST_HAMMER, TIDE_HAMMER -> "";
                 case POTATO_COMPASS -> "Sneak + right-click: Lodestone, glowing players within 30 blocks. 25 s cooldown.";
                 case POTATO_FEATHER -> "Sneak + right-click: Gust, launching you up and pushing enemies within 4 blocks. 15 s cooldown.";
@@ -1740,8 +1763,7 @@ final class Items {
                 case EMBER_HAMMER -> new String[] {"#FF8A65", "#BF360C"};
                 case FROST_HAMMER -> new String[] {"#B3E5FC", "#0277BD"};
                 case TIDE_HAMMER -> new String[] {"#80DEEA", "#00838F"};
-                case BOMBER_SUMMONER -> new String[] {"#FF5252", "#B71C1C"};
-                case BOMBER_STOPPER -> new String[] {"#BDBDBD", "#616161"};
+                case MOMISTHATABOMBER -> new String[] {"#FF5252", "#B71C1C"};
                 case POTATO_REROLLER -> new String[] {"#FF9CF0", "#7D3C98"};
                 case POTATO_WAND -> new String[] {"#E0B0FF", "#7B1FA2"};
                 case POTATO_CHARM -> new String[] {"#7CFC00", "#00C853"};
@@ -4093,8 +4115,8 @@ final class PotatoRerollerListener implements Listener {
         for (Items.Kind kind : Items.Kind.values()) {
             if (kind != Items.Kind.POTATO_REROLLER && kind != Items.Kind.WARRIORS_BLADE
                     && kind != Items.Kind.POTATO_OVERLORD && kind != Items.Kind.SQ_DISENGAGER
-                    && kind != Items.Kind.A_PLANE && kind != Items.Kind.BOMBER_SUMMONER
-                    && kind != Items.Kind.BOMBER_STOPPER && kind != Items.Kind.HIERARCHY_HAMMER
+                    && kind != Items.Kind.A_PLANE && kind != Items.Kind.MOMISTHATABOMBER
+                    && kind != Items.Kind.HIERARCHY_HAMMER
                     && kind != Items.Kind.EMBER_HAMMER && kind != Items.Kind.FROST_HAMMER
                     && kind != Items.Kind.TIDE_HAMMER) {
                 pool.add(kind);
@@ -4732,11 +4754,44 @@ final class SafezoneManager implements Listener, CommandExecutor {
 
     /** Starts combat for a player, or extends it. Says so in chat the first time. */
     private void tagCombat(Player player, long until) {
+        if (!plugin.getConfig().getBoolean("combat.enabled", true)) {
+            return;
+        }
         boolean already = inCombat(player);
         combatUntil.put(player.getUniqueId(), until);
         if (!already && plugin.getConfig().getBoolean("combat.messages", true)) {
             player.sendMessage(Text.msg("<red><bold>Combat started.</bold></red> <gray>Safezones are locked until it ends.</gray>"));
         }
+    }
+
+    /** Players who logged out in combat. They are punished when they next join. */
+    private final Set<UUID> quitInCombat = new HashSet<>();
+
+    @EventHandler
+    public void onQuitInCombat(PlayerQuitEvent event) {
+        Player player = event.getPlayer();
+        if (!inCombat(player)) {
+            return;
+        }
+        combatUntil.remove(player.getUniqueId());
+        if (plugin.getConfig().getBoolean("combat.quit_punishment", true)) {
+            quitInCombat.add(player.getUniqueId());
+        }
+        Bukkit.broadcast(Text.parse("<red>" + Text.esc(player.getName()) + " logged out in combat.</red>"));
+    }
+
+    @EventHandler
+    public void onJoinAfterQuit(PlayerJoinEvent event) {
+        Player player = event.getPlayer();
+        if (!quitInCombat.remove(player.getUniqueId())) {
+            return;
+        }
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (player.isOnline()) {
+                player.sendMessage(Text.msg("<red>You logged out in combat, so you were punished."));
+                player.setHealth(0.0);
+            }
+        }, 40L);
     }
 
     /** Runs every half second: shows the countdown above the hotbar and announces when combat ends. */
@@ -4792,7 +4847,8 @@ final class SafezoneManager implements Listener, CommandExecutor {
         if (!plugin.isPotatoFeatureEnabled() || !inCombat(player)) {
             return;
         }
-        if (zoneAt(to) != null && zoneAt(from) == null) {
+        Zone entering = zoneAt(to);
+        if (entering != null && !entering.equals(zoneAt(from))) {
             event.setCancelled(true);
             player.sendActionBar(Text.parse("<red>You can't enter a safezone while in combat."));
         }
@@ -4826,28 +4882,37 @@ final class SafezoneManager implements Listener, CommandExecutor {
 }
 
 /**
- * A Plane (operators only): a boat you fly by looking where you want to go. Q while flying drops a
- * TNT minecart; each drop uses one Firework Star. The minecarts explode on landing and never break
- * blocks, and the pilot takes no damage from them.
+ * A Plane. Right-click to call 50 parrots around you, high in the sky. They circle within 50 blocks
+ * of where you called them. Every 3 seconds they drop 5 TNT minecarts inside that radius. Nothing
+ * can hurt a parrot. Right-click again to land them.
  */
 final class PlaneManager implements Listener {
 
     private final PotatoSMP plugin;
-    private final NamespacedKey planeKey;
-    private final NamespacedKey throwerKey;
-    private final NamespacedKey cartKey;
-    private final Map<UUID, Boat> planes = new HashMap<>();
+    private final NamespacedKey parrotKey;
+    private final Map<UUID, Flock> flocks = new HashMap<>();
+    private final Random random = new Random();
 
     PlaneManager(PotatoSMP plugin) {
         this.plugin = plugin;
-        this.planeKey = new NamespacedKey(plugin, "a_plane");
-        this.throwerKey = new NamespacedKey(plugin, "tuff_thrower");
-        this.cartKey = new NamespacedKey(plugin, "tuff_cart");
+        this.parrotKey = new NamespacedKey(plugin, "plane_parrot");
+    }
+
+    private static final class Flock {
+        final Location center;
+        final List<Parrot> parrots = new ArrayList<>();
+        final List<Location> targets = new ArrayList<>();
+        BukkitTask task;
+        int tick;
+
+        Flock(Location center) {
+            this.center = center;
+        }
     }
 
     @EventHandler
     public void onRightClick(PlayerInteractEvent event) {
-        if (event.getHand() != EquipmentSlot.HAND) {
+        if (!plugin.isPotatoFeatureEnabled() || event.getHand() != EquipmentSlot.HAND) {
             return;
         }
         Action action = event.getAction();
@@ -4860,184 +4925,168 @@ final class PlaneManager implements Listener {
         event.setCancelled(true);
         event.setUseItemInHand(org.bukkit.event.Event.Result.DENY);
         event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
-        Player pilot = event.getPlayer();
-        if (!pilot.hasPermission("potato.admin")) {
-            pilot.sendMessage(Text.msg("<red>Only operators can fly the A Plane."));
+        Player player = event.getPlayer();
+        if (!player.hasPermission("potato.admin")) {
+            player.sendMessage(Text.msg("<red>Only operators can fly the plane."));
             return;
         }
-        if (planes.containsKey(pilot.getUniqueId())) {
-            pilot.sendMessage(Text.msg("<red>You're already flying a plane."));
+        UUID id = player.getUniqueId();
+        if (flocks.containsKey(id)) {
+            land(id);
+            player.sendMessage(Text.msg("<gray>The parrots have landed."));
             return;
         }
-        Location spawn = pilot.getEyeLocation().add(pilot.getLocation().getDirection().multiply(2.0));
-        Boat plane = pilot.getWorld().spawn(spawn, Boat.class);
-        plane.setGravity(false);
-        plane.setPersistent(false);
-        plane.setInvulnerable(true);
-        plane.getPersistentDataContainer().set(planeKey, PersistentDataType.BYTE, (byte) 1);
-        plane.addPassenger(pilot);
-        planes.put(pilot.getUniqueId(), plane);
-        pilot.getWorld().playSound(spawn, Sound.ENTITY_ENDER_DRAGON_FLAP, 1.0f, 1.2f);
-        fly(pilot, plane);
+        summon(player);
     }
 
-    /** Each tick, the plane is teleported forward in the direction the pilot looks. */
-    private void fly(Player pilot, Boat plane) {
-        double speed = plugin.getConfig().getDouble("plane.speed", 0.9);
-        new BukkitRunnable() {
+    private void summon(Player player) {
+        double radius = plugin.getConfig().getDouble("plane.radius", 50.0);
+        int count = Math.max(1, plugin.getConfig().getInt("plane.parrots", 50));
+        Location center = player.getLocation().clone().add(0, plugin.getConfig().getDouble("plane.height", 25.0), 0);
+        Flock flock = new Flock(center);
+        for (int i = 0; i < count; i++) {
+            Parrot parrot = center.getWorld().spawn(randomSpot(center, radius), Parrot.class);
+            parrot.setAI(false);
+            parrot.setGravity(false);
+            parrot.setSilent(true);
+            parrot.setPersistent(true);
+            parrot.setRemoveWhenFarAway(false);
+            parrot.setInvulnerable(true);
+            parrot.getPersistentDataContainer().set(parrotKey, PersistentDataType.BYTE, (byte) 1);
+            flock.parrots.add(parrot);
+            flock.targets.add(randomSpot(center, radius));
+        }
+        UUID owner = player.getUniqueId();
+        flocks.put(owner, flock);
+        flock.task = new BukkitRunnable() {
             @Override
             public void run() {
-                if (!pilot.isOnline() || !plane.isValid() || !plane.getPassengers().contains(pilot)) {
-                    land(pilot.getUniqueId(), plane);
-                    cancel();
-                    return;
-                }
-                Location pilotLoc = pilot.getLocation();
-                Vector dir = pilotLoc.getDirection();
-                Location next = plane.getLocation().add(dir.clone().multiply(speed));
-                next.setYaw(pilotLoc.getYaw());
-                next.setPitch(0f);
-                plane.teleport(next);
-                pilot.getWorld().spawnParticle(Particle.CLOUD, next, 2, 0.2, 0.1, 0.2, 0.01);
+                step(owner);
             }
         }.runTaskTimer(plugin, 1L, 1L);
+        player.sendMessage(Text.msg("<green>The plane is up. Right-click again to land."));
     }
 
-    /** The plane can't be broken or hurt by anything. */
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
-    public void onPlaneHurt(EntityDamageEvent event) {
-        if (event.getEntity().getPersistentDataContainer().has(planeKey, PersistentDataType.BYTE)) {
-            event.setCancelled(true);
+    /** Each tick: the parrots drift toward their targets, and every few seconds TNT minecarts drop. */
+    private void step(UUID owner) {
+        Flock flock = flocks.get(owner);
+        if (flock == null) {
+            return;
+        }
+        Player player = Bukkit.getPlayer(owner);
+        if (player == null || !player.isOnline()) {
+            land(owner);
+            return;
+        }
+        double radius = plugin.getConfig().getDouble("plane.radius", 50.0);
+        double speed = plugin.getConfig().getDouble("plane.speed", 0.6);
+        flock.tick++;
+        for (int i = 0; i < flock.parrots.size(); i++) {
+            Parrot parrot = flock.parrots.get(i);
+            if (!parrot.isValid()) {
+                continue;
+            }
+            Location at = parrot.getLocation();
+            Location target = flock.targets.get(i);
+            if (at.distance(target) < 2.0) {
+                target = randomSpot(flock.center, radius);
+                flock.targets.set(i, target);
+            }
+            Vector step = target.toVector().subtract(at.toVector());
+            double dist = step.length();
+            if (dist > 0) {
+                step.multiply(Math.min(speed, dist) / dist);
+            }
+            Location next = at.clone().add(step);
+            if (!step.isZero()) {
+                next.setDirection(step);
+            }
+            parrot.teleport(next);
+        }
+        int interval = Math.max(20, plugin.getConfig().getInt("plane.drop_interval_ticks", 60));
+        if (flock.tick % interval == 0) {
+            int drops = Math.max(1, plugin.getConfig().getInt("plane.drops", 5));
+            for (int i = 0; i < drops; i++) {
+                Location spot = randomSpot(flock.center, radius);
+                spot.setY(flock.center.getY() - 1);
+                spot.getWorld().spawn(spot, ExplosiveMinecart.class);
+            }
         }
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
-    public void onPlaneVehicleHurt(VehicleDamageEvent event) {
-        if (event.getVehicle().getPersistentDataContainer().has(planeKey, PersistentDataType.BYTE)) {
-            event.setCancelled(true);
-        }
+    /** A random point inside the radius, a little above or below the parrots' height. */
+    private Location randomSpot(Location center, double radius) {
+        double angle = random.nextDouble() * Math.PI * 2;
+        double dist = Math.sqrt(random.nextDouble()) * radius;
+        double y = center.getY() + (random.nextDouble() * 20.0 - 10.0);
+        return new Location(center.getWorld(), center.getX() + Math.cos(angle) * dist, y,
+                center.getZ() + Math.sin(angle) * dist);
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
-    public void onPlaneDestroyed(VehicleDestroyEvent event) {
-        if (event.getVehicle().getPersistentDataContainer().has(planeKey, PersistentDataType.BYTE)) {
-            event.setCancelled(true);
+    private void land(UUID owner) {
+        Flock flock = flocks.remove(owner);
+        if (flock == null) {
+            return;
         }
-    }
-
-    private void land(UUID pilotId, Boat plane) {
-        planes.remove(pilotId);
-        if (plane.isValid()) {
-            plane.remove();
+        if (flock.task != null) {
+            flock.task.cancel();
+        }
+        for (Parrot parrot : flock.parrots) {
+            if (parrot.isValid()) {
+                parrot.remove();
+            }
         }
     }
 
     @EventHandler
-    public void onExit(VehicleExitEvent event) {
-        if (event.getVehicle() instanceof Boat plane && plane.getPersistentDataContainer().has(planeKey, PersistentDataType.BYTE)
-                && event.getExited() instanceof Player pilot) {
-            land(pilot.getUniqueId(), plane);
-        }
+    public void onQuit(PlayerQuitEvent event) {
+        land(event.getPlayer().getUniqueId());
     }
 
-    /** Q while flying: drop a TNT minecart, which uses up one Firework Star. */
-    @EventHandler
-    public void onDrop(PlayerDropItemEvent event) {
-        Player pilot = event.getPlayer();
-        Boat plane = planes.get(pilot.getUniqueId());
-        if (plane == null || pilot.getVehicle() != plane) {
-            return;
+    /** Nothing can hurt a parrot. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onParrotHurt(EntityDamageEvent event) {
+        if (event.getEntity().getPersistentDataContainer().has(parrotKey, PersistentDataType.BYTE)) {
+            event.setCancelled(true);
         }
-        event.setCancelled(true);
-        if (!pilot.hasPermission("potato.admin")) {
-            return;
-        }
-        if (!takeStar(pilot)) {
-            pilot.sendMessage(Text.msg("<red>You need a Firework Star to drop a bomb."));
-            return;
-        }
-        dropBomb(pilot, plane.getLocation());
-    }
-
-    private boolean takeStar(Player pilot) {
-        for (int slot = 0; slot < pilot.getInventory().getSize(); slot++) {
-            ItemStack stack = pilot.getInventory().getItem(slot);
-            if (stack != null && stack.getType() == Material.FIREWORK_STAR && plugin.items().kindOf(stack) == null) {
-                if (stack.getAmount() <= 1) {
-                    pilot.getInventory().setItem(slot, null);
-                } else {
-                    stack.setAmount(stack.getAmount() - 1);
-                }
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** The minecart falls, explodes on landing with no block damage, and never hurts its pilot. */
-    private void dropBomb(Player pilot, Location from) {
-        ExplosiveMinecart cart = from.getWorld().spawn(from.clone().subtract(0, 1, 0), ExplosiveMinecart.class);
-        cart.getPersistentDataContainer().set(throwerKey, PersistentDataType.STRING, pilot.getUniqueId().toString());
-        cart.getPersistentDataContainer().set(cartKey, PersistentDataType.BYTE, (byte) 1);
-        float power = (float) plugin.getConfig().getDouble("plane.bomb_power", 3.0);
-        new BukkitRunnable() {
-            private int age = 0;
-
-            @Override
-            public void run() {
-                age++;
-                if (!cart.isValid()) {
-                    cancel();
-                    return;
-                }
-                if (age > 200) {
-                    cart.remove();
-                    cancel();
-                    return;
-                }
-                if (age >= 2 && cart.isOnGround()) {
-                    Location where = cart.getLocation();
-                    where.getWorld().createExplosion(cart, where, power, false, false);
-                    cart.remove();
-                    cancel();
-                }
-            }
-        }.runTaskTimer(plugin, 1L, 1L);
     }
 }
 
 /**
- * Bomber (operators only): the Bomber Summoner makes a formation of three phantoms that flies in the
- * direction you were looking and drops TNT minecarts. The Bomber Stopper removes it. The phantoms never
- * target anyone, and the minecarts never hurt the one who summoned them.
+ * The Bomb Dropper. Right-click to call a line of 10 vex high in the sky. They fly ahead in the
+ * direction you face, side by side. Right-click again to drop a TNT minecart from each vex. Sneak +
+ * right-click sends the vex away. Nothing can hurt a vex.
  */
 final class BomberManager implements Listener {
 
     private final PotatoSMP plugin;
-    private final NamespacedKey bomberKey;
-    private final NamespacedKey throwerKey;
-    private final NamespacedKey cartKey;
-    private final Map<UUID, List<Mob>> bombers = new HashMap<>();
-    private final Map<UUID, BukkitTask> tasks = new HashMap<>();
+    private final NamespacedKey vexKey;
+    private final Map<UUID, BombLine> lines = new HashMap<>();
 
     BomberManager(PotatoSMP plugin) {
         this.plugin = plugin;
-        this.bomberKey = new NamespacedKey(plugin, "bomber_owner");
-        this.throwerKey = new NamespacedKey(plugin, "tuff_thrower");
-        this.cartKey = new NamespacedKey(plugin, "tuff_cart");
+        this.vexKey = new NamespacedKey(plugin, "bomb_vex");
+    }
+
+    private static final class BombLine {
+        final List<Vex> vex = new ArrayList<>();
+        final List<Vector> offsets = new ArrayList<>();
+        Location lead;
+        Vector forward;
+        BukkitTask task;
+        int ticks;
     }
 
     @EventHandler
-    public void onRightClick(PlayerInteractEvent event) {
-        if (event.getHand() != EquipmentSlot.HAND) {
+    public void onUse(PlayerInteractEvent event) {
+        if (!plugin.isPotatoFeatureEnabled() || event.getHand() != EquipmentSlot.HAND) {
             return;
         }
         Action action = event.getAction();
         if (action != Action.RIGHT_CLICK_AIR && action != Action.RIGHT_CLICK_BLOCK) {
             return;
         }
-        Items.Kind kind = plugin.items().kindOf(event.getItem());
-        if (kind != Items.Kind.BOMBER_SUMMONER && kind != Items.Kind.BOMBER_STOPPER) {
+        if (plugin.items().kindOf(event.getItem()) != Items.Kind.MOMISTHATABOMBER) {
             return;
         }
         event.setCancelled(true);
@@ -5045,149 +5094,127 @@ final class BomberManager implements Listener {
         event.setUseInteractedBlock(org.bukkit.event.Event.Result.DENY);
         Player player = event.getPlayer();
         if (!player.hasPermission("potato.admin")) {
-            player.sendMessage(Text.msg("<red>Only operators can use the bomber."));
+            player.sendMessage(Text.msg("<red>Only operators can use the Bomb Dropper."));
             return;
         }
-        if (kind == Items.Kind.BOMBER_STOPPER) {
-            stop(player);
-        } else {
+        UUID id = player.getUniqueId();
+        if (player.isSneaking()) {
+            dismiss(id);
+            player.sendMessage(Text.msg("<gray>The vex have flown away."));
+            return;
+        }
+        BombLine line = lines.get(id);
+        if (line == null) {
             summon(player);
+        } else {
+            dropAll(line);
         }
     }
 
     private void summon(Player player) {
-        UUID owner = player.getUniqueId();
-        if (bombers.containsKey(owner)) {
-            player.sendMessage(Text.msg("<red>Your bomber is already flying. Right-click the Bomber Stopper to stop it."));
-            return;
-        }
+        Location start = player.getLocation().clone().add(0, plugin.getConfig().getDouble("bomber.height", 25.0), 0);
         Vector forward = player.getLocation().getDirection().setY(0);
-        if (forward.lengthSquared() < 0.0001) {
-            forward = new Vector(1, 0, 0);
+        if (forward.lengthSquared() < 1.0e-6) {
+            forward = new Vector(0, 0, 1);
         }
         forward.normalize();
-        Vector right = forward.clone().crossProduct(new Vector(0, 1, 0)).normalize();
-        Location core = player.getEyeLocation().add(forward.clone().multiply(5.0)).add(0, 3, 0);
-
-        Vector[] offsets = {new Vector(0, 0, 0), right.clone().multiply(2.5),
-                right.clone().multiply(-2.5).add(forward.clone().multiply(-1.0))};
-        List<Mob> parts = new ArrayList<>();
-        for (Vector offset : offsets) {
-            Location spot = core.clone().add(offset);
-            Phantom phantom = spot.getWorld().spawn(spot, Phantom.class);
-            phantom.setAI(false);
-            phantom.setGravity(false);
-            phantom.setSilent(true);
-            phantom.setPersistent(true);
-            phantom.setRemoveWhenFarAway(false);
-            phantom.setInvulnerable(true);
-            phantom.getPersistentDataContainer().set(bomberKey, PersistentDataType.STRING, owner.toString());
-            parts.add(phantom);
+        Vector right = new Vector(-forward.getZ(), 0, forward.getX());
+        BombLine line = new BombLine();
+        line.forward = forward;
+        line.lead = start;
+        int count = 10;
+        double gap = 3.0;
+        for (int i = 0; i < count; i++) {
+            Vector offset = right.clone().multiply((i - (count - 1) / 2.0) * gap);
+            line.offsets.add(offset);
+            Vex vex = start.getWorld().spawn(start.clone().add(offset), Vex.class);
+            vex.setAI(false);
+            vex.setGravity(false);
+            vex.setSilent(true);
+            vex.setPersistent(true);
+            vex.setRemoveWhenFarAway(false);
+            vex.setInvulnerable(true);
+            vex.getPersistentDataContainer().set(vexKey, PersistentDataType.BYTE, (byte) 1);
+            line.vex.add(vex);
         }
-        bombers.put(owner, parts);
-        player.sendMessage(Text.msg("<green>Bomber summoned. Right-click the Bomber Stopper to stop it."));
-        fly(player, parts, offsets, core, forward);
-    }
-
-    /** Moves the formation forward each tick, keeping each part in its place, and drops a minecart every few ticks. */
-    private void fly(Player player, List<Mob> parts, Vector[] offsets, Location core, Vector forward) {
         UUID owner = player.getUniqueId();
-        double speed = plugin.getConfig().getDouble("bomber.speed", 0.7);
-        int interval = Math.max(5, plugin.getConfig().getInt("bomber.drop_interval_ticks", 40));
-        Location[] head = {core.clone()};
-        BukkitTask task = new BukkitRunnable() {
-            private int tick = 0;
-
+        lines.put(owner, line);
+        line.task = new BukkitRunnable() {
             @Override
             public void run() {
-                tick++;
-                for (Mob part : parts) {
-                    if (!part.isValid()) {
-                        cleanup(owner);
-                        cancel();
-                        return;
-                    }
-                }
-                head[0] = head[0].clone().add(forward.clone().multiply(speed));
-                for (int i = 0; i < parts.size(); i++) {
-                    parts.get(i).teleport(head[0].clone().add(offsets[i]));
-                }
-                if (tick % interval == 0) {
-                    dropBomb(owner, parts.get(0).getLocation());
-                }
+                step(owner);
             }
         }.runTaskTimer(plugin, 1L, 1L);
-        tasks.put(owner, task);
+        player.sendMessage(Text.msg("<green>Ten vex are flying. Right-click to drop a TNT minecart from each one."));
     }
 
-    /** The bomber can't be hurt by anything. */
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
-    public void onBomberHurt(EntityDamageEvent event) {
-        if (event.getEntity().getPersistentDataContainer().has(bomberKey, PersistentDataType.STRING)) {
-            event.setCancelled(true);
-        }
-    }
-
-    private void stop(Player player) {
-        UUID owner = player.getUniqueId();
-        if (!bombers.containsKey(owner)) {
-            player.sendMessage(Text.msg("<red>You have no bomber flying."));
+    /** Each tick the line moves forward, keeping its side-by-side spacing. */
+    private void step(UUID owner) {
+        BombLine line = lines.get(owner);
+        if (line == null) {
             return;
         }
-        cleanup(owner);
-        player.sendMessage(Text.msg("<green>Bomber stopped."));
-    }
-
-    private void cleanup(UUID owner) {
-        List<Mob> parts = bombers.remove(owner);
-        if (parts != null) {
-            for (Mob part : parts) {
-                if (part.isValid()) {
-                    part.remove();
-                }
+        Player player = Bukkit.getPlayer(owner);
+        if (player == null || !player.isOnline()) {
+            dismiss(owner);
+            return;
+        }
+        for (Vex vex : line.vex) {
+            if (!vex.isValid()) {
+                dismiss(owner);
+                return;
             }
         }
-        BukkitTask task = tasks.remove(owner);
-        if (task != null) {
-            task.cancel();
+        line.ticks++;
+        int lifetime = plugin.getConfig().getInt("bomber.lifetime_seconds", 300) * 20;
+        if (lifetime > 0 && line.ticks > lifetime) {
+            dismiss(owner);
+            player.sendMessage(Text.msg("<gray>The vex flew off."));
+            return;
+        }
+        double speed = plugin.getConfig().getDouble("bomber.speed", 0.7);
+        line.lead = line.lead.clone().add(line.forward.clone().multiply(speed));
+        for (int i = 0; i < line.vex.size(); i++) {
+            Location spot = line.lead.clone().add(line.offsets.get(i));
+            spot.setDirection(line.forward);
+            line.vex.get(i).teleport(spot);
         }
     }
 
-    /** A minecart falls from the core, explodes on landing, and never breaks blocks or hurts its owner. */
-    private void dropBomb(UUID owner, Location from) {
-        float power = (float) plugin.getConfig().getDouble("bomber.bomb_power", 3.0);
-        ExplosiveMinecart cart = from.getWorld().spawn(from.clone().subtract(0, 1, 0), ExplosiveMinecart.class);
-        cart.getPersistentDataContainer().set(throwerKey, PersistentDataType.STRING, owner.toString());
-        cart.getPersistentDataContainer().set(cartKey, PersistentDataType.BYTE, (byte) 1);
-        new BukkitRunnable() {
-            private int age = 0;
-
-            @Override
-            public void run() {
-                age++;
-                if (!cart.isValid()) {
-                    cancel();
-                    return;
-                }
-                if (age > 200) {
-                    cart.remove();
-                    cancel();
-                    return;
-                }
-                if (age >= 2 && cart.isOnGround()) {
-                    Location where = cart.getLocation();
-                    where.getWorld().createExplosion(cart, where, power, false, false);
-                    cart.remove();
-                    cancel();
-                }
+    /** Every vex drops one TNT minecart from where it is. */
+    private void dropAll(BombLine line) {
+        for (Vex vex : line.vex) {
+            if (vex.isValid()) {
+                Location at = vex.getLocation().clone();
+                at.getWorld().spawn(at, ExplosiveMinecart.class);
             }
-        }.runTaskTimer(plugin, 1L, 1L);
+        }
     }
 
-    /** The phantoms never pick a target, so they never go after anyone. */
+    private void dismiss(UUID owner) {
+        BombLine line = lines.remove(owner);
+        if (line == null) {
+            return;
+        }
+        if (line.task != null) {
+            line.task.cancel();
+        }
+        for (Vex vex : line.vex) {
+            if (vex.isValid()) {
+                vex.remove();
+            }
+        }
+    }
+
     @EventHandler
-    public void onTarget(EntityTargetEvent event) {
-        if (event.getEntity().getPersistentDataContainer().has(bomberKey, PersistentDataType.STRING)) {
+    public void onQuit(PlayerQuitEvent event) {
+        dismiss(event.getPlayer().getUniqueId());
+    }
+
+    /** Nothing can hurt a vex. */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
+    public void onVexHurt(EntityDamageEvent event) {
+        if (event.getEntity().getPersistentDataContainer().has(vexKey, PersistentDataType.BYTE)) {
             event.setCancelled(true);
         }
     }
@@ -5598,6 +5625,7 @@ final class FillWandManager implements Listener, CommandExecutor, TabCompleter {
     private final PotatoSMP plugin;
     private final NamespacedKey wandKey;
     private final Map<UUID, Location[]> selections = new HashMap<>();
+    private final Map<UUID, List<Map.Entry<Location, org.bukkit.block.data.BlockData>>> lastFill = new HashMap<>();
 
     FillWandManager(PotatoSMP plugin) {
         this.plugin = plugin;
@@ -5621,9 +5649,12 @@ final class FillWandManager implements Listener, CommandExecutor, TabCompleter {
         } else if (args.length == 1 && args[0].equalsIgnoreCase("clear")) {
             selections.remove(player.getUniqueId());
             player.sendMessage(Text.msg("<gray>Selection cleared."));
+        } else if (args.length == 1 && args[0].equalsIgnoreCase("undo")) {
+            undo(player);
         } else {
             player.sendMessage(Text.msg("<gray>Usage: <white>/fillwand</white> gets the wand. "
-                    + "<white>/fillwand fill <block></white> fills the box. <white>/fillwand clear</white> resets it."));
+                    + "<white>/fillwand fill <block></white> fills the box. <white>/fillwand undo</white> reverts the last fill. "
+                    + "<white>/fillwand clear</white> resets the corners."));
         }
         return true;
     }
@@ -5701,26 +5732,43 @@ final class FillWandManager implements Listener, CommandExecutor, TabCompleter {
         }
         org.bukkit.World world = sel[0].getWorld();
         int changed = 0;
+        List<Map.Entry<Location, org.bukkit.block.data.BlockData>> snapshot = new ArrayList<>();
         for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
                 for (int z = minZ; z <= maxZ; z++) {
                     org.bukkit.block.Block block = world.getBlockAt(x, y, z);
                     if (block.getType() != material) {
+                        snapshot.add(Map.entry(block.getLocation(), block.getBlockData()));
                         block.setType(material, false);
                         changed++;
                     }
                 }
             }
         }
+        if (changed > 0) {
+            lastFill.put(player.getUniqueId(), snapshot);
+        }
         player.sendMessage(Text.msg("<green>Filled " + changed + " blocks with <white>"
                 + material.name().toLowerCase(Locale.ROOT).replace('_', ' ') + "</white>."));
+    }
+
+    private void undo(Player player) {
+        List<Map.Entry<Location, org.bukkit.block.data.BlockData>> snapshot = lastFill.remove(player.getUniqueId());
+        if (snapshot == null || snapshot.isEmpty()) {
+            player.sendMessage(Text.msg("<red>Nothing to undo."));
+            return;
+        }
+        for (Map.Entry<Location, org.bukkit.block.data.BlockData> entry : snapshot) {
+            entry.getKey().getBlock().setBlockData(entry.getValue(), false);
+        }
+        player.sendMessage(Text.msg("<green>Undid the last fill: " + snapshot.size() + " blocks restored."));
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
-            for (String sub : List.of("fill", "clear")) {
+            for (String sub : List.of("fill", "clear", "undo")) {
                 if (sub.startsWith(args[0].toLowerCase(Locale.ROOT))) {
                     out.add(sub);
                 }
@@ -5752,6 +5800,7 @@ final class DeathNoteManager implements Listener {
     private final PotatoSMP plugin;
     private final Set<UUID> noteVictims = new HashSet<>();
     private final Map<UUID, Long> readyAt = new HashMap<>();
+    private final Map<UUID, GameMode> restoreMode = new HashMap<>();
     private int phase = 0;
 
     DeathNoteManager(PotatoSMP plugin) {
@@ -5837,6 +5886,9 @@ final class DeathNoteManager implements Listener {
             return false;
         }
         noteVictims.add(victim.getUniqueId());
+        restoreMode.putIfAbsent(victim.getUniqueId(), victim.getGameMode());
+        victim.setGameMode(GameMode.SURVIVAL);
+        victim.setInvulnerable(false);
         victim.setHealth(0.0);
         writer.sendMessage(Text.msg("<dark_red>" + Text.esc(victim.getName()) + "</dark_red> <gray>is written in the Death Note.</gray>"));
         return true;
@@ -5849,6 +5901,22 @@ final class DeathNoteManager implements Listener {
             }
         }
         return null;
+    }
+
+    /** A Totem of Undying can't save a Death Note victim. */
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onNoTotem(EntityResurrectEvent event) {
+        if (event.getEntity() instanceof Player victim && noteVictims.contains(victim.getUniqueId())) {
+            event.setCancelled(true);
+        }
+    }
+
+    @EventHandler
+    public void onNoteRespawn(PlayerRespawnEvent event) {
+        GameMode mode = restoreMode.remove(event.getPlayer().getUniqueId());
+        if (mode != null) {
+            Bukkit.getScheduler().runTask(plugin, () -> event.getPlayer().setGameMode(mode));
+        }
     }
 
     @EventHandler(priority = EventPriority.HIGHEST)
